@@ -4,6 +4,7 @@ keys/
 test-logs/
 uploads/
 _package/
+protocol-test/
 *.log
 tcs-audit.log
 .vs/

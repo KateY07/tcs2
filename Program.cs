@@ -40,6 +40,62 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.AspNetCore.Server.Kestrel.Https;
 
+if (args.FirstOrDefault() == "--tcsd")
+{
+    string Option(string name, string fallback)
+    {
+        var index = Array.IndexOf(args, name);
+        return index >= 0 && index + 1 < args.Length ? args[index + 1] : fallback;
+    }
+
+    var daemon = new tcsd(
+        Option("--authorized-keys", "authorized_keys"),
+        Option("--host-key", "server_host_key"),
+        Option("--data", AppContext.BaseDirectory));
+    await daemon.RunAsync(IPAddress.Any, int.Parse(Option("--port", "10122")));
+    return;
+}
+
+if (args.FirstOrDefault() == "--tcs-client")
+{
+    string Option(string name, string fallback)
+    {
+        var index = Array.IndexOf(args, name);
+        return index >= 0 && index + 1 < args.Length ? args[index + 1] : fallback;
+    }
+
+    var client = new tcs(
+        Option("--host", "127.0.0.1"),
+        int.Parse(Option("--port", "10122")),
+        Option("--client-key", "id_ed25519"),
+        Option("--server-key", "server_host_key.pub"));
+    var operation = Option("--operation", "health");
+    if (operation == "health")
+    {
+        Console.WriteLine((await client.HealthAsync()).GetRawText());
+    }
+    else if (operation == "exec")
+    {
+        var encodedScript = Option("--script-base64", "");
+        var script = encodedScript.Length == 0 ? Option("--script", "print('ok')") : Encoding.UTF8.GetString(Convert.FromBase64String(encodedScript));
+        Console.WriteLine((await client.ExecAsync(script)).GetRawText());
+    }
+    else if (operation == "upload")
+    {
+        var path = Option("--file", "");
+        if (path.Length == 0)
+        {
+            throw new ArgumentException("--file is required");
+        }
+        Console.WriteLine((await client.UploadAsync(Path.GetFileName(path), await File.ReadAllBytesAsync(path))).GetRawText());
+    }
+    else
+    {
+        throw new ArgumentException($"unknown client operation: {operation}");
+    }
+    return;
+}
+
 var (keyDir, port) = ParseArgs(args);
 
 var serverCertificate = BuildServerCertificate(

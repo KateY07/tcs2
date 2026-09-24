@@ -15,6 +15,7 @@
       bin/<Config>/net10.0/ that runs against the installed runtime.
     -->
     <SelfContained>false</SelfContained>
+    <NoWarn>$(NoWarn);CS8981</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
@@ -24,6 +25,10 @@
     <Content Remove="uploads\**" />
     <Content Remove="test-logs\**" />
     <Content Remove="_package\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.7.0" />
   </ItemGroup>
 
 </Project>
