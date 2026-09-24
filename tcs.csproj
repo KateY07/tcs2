@@ -7,14 +7,9 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <AssemblyName>tcs</AssemblyName>
     <RootNamespace>Tcs</RootNamespace>
-    <!--
-      Framework-dependent by design: this machine already has the .NET 10
-      runtime installed, so we do not publish self-contained. A plain
-      `dotnet build` (or `dotnet publish`, still framework-dependent unless
-      you explicitly pass the self-contained option) produces tcs.exe under
-      bin/<Config>/net10.0/ that runs against the installed runtime.
-    -->
-    <SelfContained>false</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishAot>true</PublishAot>
     <NoWarn>$(NoWarn);CS8981</NoWarn>
   </PropertyGroup>
 

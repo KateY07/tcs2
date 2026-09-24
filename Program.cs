@@ -40,7 +40,11 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.AspNetCore.Server.Kestrel.Https;
 
-if (args.FirstOrDefault() == "--tcsd")
+var sshDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ssh");
+string SshPath(string fileName) => Path.Combine(sshDirectory, fileName);
+var executableName = Path.GetFileNameWithoutExtension(Environment.ProcessPath);
+
+if (args.FirstOrDefault() == "--tcsd" || string.Equals(executableName, "tcsd", StringComparison.OrdinalIgnoreCase))
 {
     string Option(string name, string fallback)
     {
@@ -49,14 +53,14 @@ if (args.FirstOrDefault() == "--tcsd")
     }
 
     var daemon = new tcsd(
-        Option("--authorized-keys", "authorized_keys"),
-        Option("--host-key", "server_host_key"),
+        Option("--authorized-keys", SshPath("authorized_keys")),
+        Option("--host-key", SshPath("tcs_host_key")),
         Option("--data", AppContext.BaseDirectory));
     await daemon.RunAsync(IPAddress.Any, int.Parse(Option("--port", "10122")));
     return;
 }
 
-if (args.FirstOrDefault() == "--tcs-client")
+if (args.FirstOrDefault() == "--tcs-client" || string.Equals(executableName, "tcs", StringComparison.OrdinalIgnoreCase))
 {
     string Option(string name, string fallback)
     {
@@ -67,8 +71,8 @@ if (args.FirstOrDefault() == "--tcs-client")
     var client = new tcs(
         Option("--host", "127.0.0.1"),
         int.Parse(Option("--port", "10122")),
-        Option("--client-key", "id_ed25519"),
-        Option("--server-key", "server_host_key.pub"));
+        Option("--client-key", SshPath("id_ed25519")),
+        Option("--server-key", SshPath("tcs_host_key.pub")));
     var operation = Option("--operation", "health");
     if (operation == "health")
     {
@@ -183,16 +187,10 @@ app.MapPost("/v1/exec", async (HttpContext context, ExecRequest request) =>
     }
 
     started.Stop();
-    WriteAudit(new
-    {
-        timestamp = DateTimeOffset.UtcNow,
-        endpoint = "/v1/exec",
-        clientThumbprint = thumbprint,
-        script = request.Script,
-        durationMs = started.ElapsedMilliseconds,
-        result.ExitCode,
-        result.TimedOut,
-    });
+    WriteAudit(JsonSerializer.Serialize(
+        new LegacyExecAudit(DateTimeOffset.UtcNow, "/v1/exec", thumbprint, request.Script,
+            started.ElapsedMilliseconds, result.ExitCode, result.TimedOut),
+        TcsJsonContext.Default.LegacyExecAudit));
 
     return Results.Ok(result);
 });
@@ -229,13 +227,9 @@ app.MapPost("/v1/upload", async (HttpContext context) =>
         saved.Add(storedName);
     }
 
-    WriteAudit(new
-    {
-        timestamp = DateTimeOffset.UtcNow,
-        endpoint = "/v1/upload",
-        clientThumbprint = thumbprint,
-        files = saved,
-    });
+    WriteAudit(JsonSerializer.Serialize(
+        new LegacyUploadAudit(DateTimeOffset.UtcNow, "/v1/upload", thumbprint, saved.ToArray()),
+        TcsJsonContext.Default.LegacyUploadAudit));
 
     return Results.Ok(new { saved });
 });
@@ -297,7 +291,7 @@ static HashSet<string> LoadAuthorizedClients(string path)
     }
 
     var json = File.ReadAllText(path);
-    var thumbprints = JsonSerializer.Deserialize<string[]>(json)
+    var thumbprints = JsonSerializer.Deserialize(json, TcsJsonContext.Default.StringArray)
         ?? throw new InvalidDataException("authorized-clients.json must be a JSON array of strings");
 
     return thumbprints
@@ -383,17 +377,10 @@ static void TryDelete(string path)
     }
 }
 
-void WriteAudit(object entry)
+void WriteAudit(string line)
 {
-    var line = JsonSerializer.Serialize(entry);
     lock (auditLock)
     {
         File.AppendAllText(auditLogPath, line + Environment.NewLine);
     }
 }
-
-// ---- request/response shapes -------------------------------------------
-
-record ExecRequest(string Script, int? TimeoutSeconds);
-
-record ExecResult(int? ExitCode, string Stdout, string Stderr, bool TimedOut);

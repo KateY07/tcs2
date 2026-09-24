@@ -182,10 +182,7 @@ public sealed class tcsd
 
     async Task<byte[]> ExecAsync(byte[] body, string fingerprint, CancellationToken cancellationToken)
     {
-        var request = JsonSerializer.Deserialize<ExecRequest>(body, new JsonSerializerOptions
-        {
-            PropertyNameCaseInsensitive = true
-        })
+        var request = JsonSerializer.Deserialize(body, TcsJsonContext.Default.ExecRequest)
             ?? throw new InvalidDataException("invalid exec JSON");
         if (string.IsNullOrEmpty(request.Script))
         {
@@ -199,8 +196,10 @@ public sealed class tcsd
         {
             var result = await RunPythonAsync(scriptPath, TimeSpan.FromSeconds(request.TimeoutSeconds is > 0 ? request.TimeoutSeconds.Value : 30), cancellationToken);
             started.Stop();
-            WriteAudit(new { timestamp = DateTimeOffset.UtcNow, endpoint = "/v1/exec", clientFingerprint = fingerprint, durationMs = started.ElapsedMilliseconds, result.ExitCode, result.TimedOut });
-            return HttpResponse(200, "application/json", JsonSerializer.Serialize(result));
+            WriteAudit(JsonSerializer.Serialize(
+                new TcsExecAudit(DateTimeOffset.UtcNow, "/v1/exec", fingerprint, started.ElapsedMilliseconds, result.ExitCode, result.TimedOut),
+                TcsJsonContext.Default.TcsExecAudit));
+            return HttpResponse(200, "application/json", JsonSerializer.Serialize(result, TcsJsonContext.Default.ExecResult));
         }
         finally
         {
@@ -243,8 +242,11 @@ public sealed class tcsd
         }
         var stored = $"{DateTimeOffset.UtcNow:yyyyMMddTHHmmssZ}_{Guid.NewGuid():N}_{filename}";
         await File.WriteAllBytesAsync(Path.Combine(uploadsDirectory, stored), body[dataStart..dataEnd], cancellationToken);
-        WriteAudit(new { timestamp = DateTimeOffset.UtcNow, endpoint = "/v1/upload", clientFingerprint = fingerprint, files = new[] { stored } });
-        return HttpResponse(200, "application/json", JsonSerializer.Serialize(new { saved = new[] { stored } }));
+        WriteAudit(JsonSerializer.Serialize(
+            new TcsUploadAudit(DateTimeOffset.UtcNow, "/v1/upload", fingerprint, new[] { stored }),
+            TcsJsonContext.Default.TcsUploadAudit));
+        return HttpResponse(200, "application/json", JsonSerializer.Serialize(
+            new UploadResponse(new[] { stored }), TcsJsonContext.Default.UploadResponse));
     }
 
     static byte[] HttpResponse(int status, string contentType, string body)
@@ -298,11 +300,11 @@ public sealed class tcsd
         return new ExecResult(timedOut ? null : process.ExitCode, await stdout, await stderr, timedOut);
     }
 
-    void WriteAudit(object entry)
+    void WriteAudit(string line)
     {
         lock (auditLock)
         {
-            File.AppendAllText(auditPath, JsonSerializer.Serialize(entry) + Environment.NewLine);
+            File.AppendAllText(auditPath, line + Environment.NewLine);
         }
     }
 
@@ -312,6 +314,4 @@ public sealed class tcsd
         catch (Exception exception) { Console.Error.WriteLine($"tcsd: failed to delete temporary script '{path}': {exception}"); }
     }
 
-    record ExecRequest(string Script, int? TimeoutSeconds);
-    record ExecResult(int? ExitCode, string Stdout, string Stderr, bool TimedOut);
 }

@@ -21,7 +21,9 @@ public sealed class tcs
 
     public async Task<JsonElement> ExecAsync(string script, int timeoutSeconds = 30, CancellationToken cancellationToken = default)
     {
-        var body = JsonSerializer.SerializeToUtf8Bytes(new { script, timeoutSeconds });
+        var body = JsonSerializer.SerializeToUtf8Bytes(
+            new ClientExecRequest(script, timeoutSeconds),
+            TcsJsonContext.Default.ClientExecRequest);
         var response = await RequestAsync(BuildRequest("POST", "/v1/exec", "application/json", body), cancellationToken);
         EnsureSuccess(response);
         return JsonDocument.Parse(response.Body).RootElement.Clone();
