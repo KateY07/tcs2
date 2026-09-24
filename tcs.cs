@@ -50,7 +50,8 @@ public sealed class tcs
 
     async Task<Response> RequestAsync(byte[] request, CancellationToken cancellationToken)
     {
-        using var tcp = new TcpClient();
+        using var tcp = new TcpClient(AddressFamily.InterNetworkV6);
+        tcp.Client.DualMode = true;
         await tcp.ConnectAsync(host, port, cancellationToken);
         await using var stream = tcp.GetStream();
         var session = await HandshakeAsync(stream, cancellationToken);

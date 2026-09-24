@@ -34,7 +34,8 @@ public sealed class tcsd
 
     public async Task RunAsync(IPAddress address, int port, CancellationToken cancellationToken = default)
     {
-        var listener = new TcpListener(address, port);
+        var listener = new TcpListener(IPAddress.IPv6Any, port);
+        listener.Server.DualMode = true;
         listener.Start();
         try
         {
