@@ -20,6 +20,10 @@
   <ItemGroup>
     <!-- No extra NuGet packages: everything used here ships in the
          Microsoft.NET.Sdk.Web / ASP.NET Core shared framework. -->
+    <Content Remove="keys\**" />
+    <Content Remove="uploads\**" />
+    <Content Remove="test-logs\**" />
+    <Content Remove="_package\**" />
   </ItemGroup>
 
 </Project>
