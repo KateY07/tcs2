@@ -3,6 +3,7 @@ obj/
 keys/
 test-logs/
 uploads/
+_package/
 *.log
 tcs-audit.log
 .vs/
