@@ -1,0 +1,8 @@
+bin/
+obj/
+keys/
+test-logs/
+uploads/
+*.log
+tcs-audit.log
+.vs/

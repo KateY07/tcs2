@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <AssemblyName>tcs</AssemblyName>
+    <RootNamespace>Tcs</RootNamespace>
+    <!--
+      Framework-dependent by design: this machine already has the .NET 10
+      runtime installed, so we do not publish self-contained. A plain
+      `dotnet build` (or `dotnet publish`, still framework-dependent unless
+      you explicitly pass the self-contained option) produces tcs.exe under
+      bin/<Config>/net10.0/ that runs against the installed runtime.
+    -->
+    <SelfContained>false</SelfContained>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- No extra NuGet packages: everything used here ships in the
+         Microsoft.NET.Sdk.Web / ASP.NET Core shared framework. -->
+  </ItemGroup>
+
+</Project>
