@@ -37,6 +37,7 @@ public sealed class tcsd
         var listener = new TcpListener(IPAddress.IPv6Any, port);
         listener.Server.DualMode = true;
         listener.Start();
+        Console.Error.WriteLine($"被控端已启动：IPv4/IPv6 TCP {port}\n主机指纹：{Tcs.Pairing.Fingerprint(hostBlob)}\n已授权主控公钥：{authorizedBlobs.Count}\n按 Ctrl+C 停止。");
         try
         {
             while (!cancellationToken.IsCancellationRequested)

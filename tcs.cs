@@ -108,13 +108,7 @@ public sealed class tcs
         {
             throw new CryptographicException("server host-key fingerprint mismatch");
         }
-        var serverPublic = Org.BouncyCastle.Crypto.Utilities.OpenSshPublicKeyUtilities.ParsePublicKey(serverHello.Blob);
-        var serverUnsigned = serverHello.Raw[..^(4 + serverHello.Signature.Length)];
-        var serverSignatureInput = TcsCrypto.HashLabel("TCS1/server", clientHello, serverUnsigned);
-        if (!TcsCrypto.Verify(serverPublic, serverSignatureInput, serverHello.Signature))
-        {
-            throw new CryptographicException("invalid server signature");
-        }
+        VerifyServerSignature(clientHello, serverHello.Blob, serverHello.Raw, serverHello.Signature);
 
         var clientSignature = TcsCrypto.Sign(clientPrivate, TcsCrypto.HashLabel("TCS1/client", clientHello, serverHello.Raw));
         var clientAuth = TcsWire.BuildClientAuth(clientSignature);
@@ -122,6 +116,29 @@ public sealed class tcs
         var shared = TcsCrypto.Agree(clientEphemeral, serverHello.Ephemeral);
         var transcript = SHA256.HashData(clientHello.Concat(serverHello.Raw).Concat(clientAuth).ToArray());
         return new TcsWire.Session(TcsCrypto.Derive(shared, transcript), client: true);
+    }
+
+    public static async Task<byte[]> InspectServerKeyAsync(string host, int port, string privateKeyPath, CancellationToken cancellationToken = default)
+    {
+        var clientBlob = TcsCrypto.PublicBlob(TcsCrypto.ReadPrivateKey(privateKeyPath));
+        var (_, ephemeral) = TcsCrypto.NewEphemeral();
+        var hello = TcsWire.BuildClientHello(clientBlob, ephemeral, RandomNumberGenerator.GetBytes(32));
+        using var tcp = new TcpClient(AddressFamily.InterNetworkV6);
+        tcp.Client.DualMode = true;
+        await tcp.ConnectAsync(host, port, cancellationToken);
+        await using var stream = tcp.GetStream();
+        await TcsWire.WriteAllAsync(stream, hello, cancellationToken);
+        var server = await TcsWire.ReadServerHelloAsync(stream, cancellationToken);
+        VerifyServerSignature(hello, server.Blob, server.Raw, server.Signature);
+        return server.Blob;
+    }
+
+    static void VerifyServerSignature(byte[] clientHello, byte[] blob, byte[] raw, byte[] signature)
+    {
+        var serverPublic = Org.BouncyCastle.Crypto.Utilities.OpenSshPublicKeyUtilities.ParsePublicKey(blob);
+        var unsigned = raw[..^(4 + signature.Length)];
+        if (!TcsCrypto.Verify(serverPublic, TcsCrypto.HashLabel("TCS1/server", clientHello, unsigned), signature))
+            throw new CryptographicException("invalid server signature");
     }
 
     static byte[] BuildRequest(string method, string path, string? contentType, byte[] body)

@@ -1,6 +1,6 @@
 ﻿param([string]$Version='2026.09.24.2')
 $ErrorActionPreference='Stop'
-if (-not $PSBoundParameters.ContainsKey('Version')) { $Version='2026.09.26.2' }
+if (-not $PSBoundParameters.ContainsKey('Version')) { $Version='2026.09.26.4' }
 if ($Version -notmatch '^[A-Za-z0-9._-]+$') { throw 'Invalid version' }
 $repo=Split-Path $PSScriptRoot -Parent
 $release="D:\pub\tcs\$Version.zip"
@@ -9,7 +9,7 @@ $payload=Join-Path $repo "_package\tcs-manual-$Version"
 $installer=$payload+'.exe'
 if ((Test-Path -LiteralPath $payload) -or (Test-Path -LiteralPath $installer)) { throw 'Build destination exists' }
 $null=New-Item -ItemType Directory -Path $payload
-$binary=Join-Path $repo '_package\help-build\tcs.exe'
+$binary=Join-Path $repo '_package\pairing-build\tcs.exe'
 Copy-Item -LiteralPath $binary -Destination (Join-Path $payload 'tcs.exe')
 Copy-Item -LiteralPath $binary -Destination (Join-Path $payload 'tcsd.exe')
 Copy-Item -LiteralPath (Join-Path $repo 'README.md') -Destination $payload

@@ -18,7 +18,7 @@ static class TcsCrypto
             .Select(line => line.Trim())
             .FirstOrDefault(line => line.Length > 0 && !line.StartsWith('#'))
             ?? throw new InvalidDataException($"no public key in {path}");
-        var fields = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        var fields = line.Split((char[]?)null, 3, StringSplitOptions.RemoveEmptyEntries);
         if (fields.Length < 2 || fields.Length > 3 || fields[0].Contains('='))
         {
             throw new InvalidDataException($"invalid authorized key line in {path}");
@@ -44,7 +44,7 @@ static class TcsCrypto
             {
                 continue;
             }
-            var fields = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            var fields = line.Split((char[]?)null, 3, StringSplitOptions.RemoveEmptyEntries);
             if (fields.Length is < 2 or > 3 || fields[0].Contains('='))
             {
                 throw new InvalidDataException("authorized_keys options are not supported");

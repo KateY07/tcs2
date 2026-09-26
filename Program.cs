@@ -56,6 +56,11 @@ static void PrintHelp(bool daemon)
     Console.WriteLine(daemon ? """
 TCS 被控端：tcsd [options]
 
+配对导入：
+  tcsd pairing import <file.tcs-pair>
+  可选：--authorized-keys <path>、--host-key <path>
+        --trust-fingerprint <SHA256:...>（已通过可信渠道核对的主控指纹）
+
 选项：
   -h, --help                    显示帮助
   --port <1-65535>              TCP 监听端口（默认：10122）
@@ -69,17 +74,22 @@ TCS 被控端：tcsd [options]
   tcsd --port 10122 --authorized-keys "$env:USERPROFILE\.ssh\authorized_keys" `
        --host-key "$env:USERPROFILE\.ssh\tcs_host_key" --data .\data
 
-保持此进程运行以接受连接。TCS 不会自动创建密钥或 authorized_keys；
-可用 ssh-keygen 生成 OpenSSH 密钥，并将主控端公钥加入授权文件。
+保持此进程运行以接受连接。pairing import 会调用 ssh-keygen 创建缺失的主机密钥，
+经确认后添加主控公钥。普通启动不会自动创建密钥或授权文件。
 """ : """
 TCS 主控端：tcs [options]
+
+配对导出：
+  tcs pairing export --output <file.tcs-pair> [--client-key <private-key>]
 
 选项：
   -h, --help                 显示帮助
   --host <name-or-address>   被控端地址（默认：127.0.0.1）
   --port <1-65535>           TCP 端口（默认：10122）
   --client-key <path>        主控端 OpenSSH 私钥（默认：~/.ssh/id_ed25519）
-  --server-key <path>        被控端固定公钥（默认：~/.ssh/tcs_host_key.pub）
+  --server-key <path>        显式指定被控端固定公钥，严格校验
+  --known-hosts <directory>  按地址和端口保存公钥（默认：~/.ssh/tcs_known_hosts）
+  --trust-fingerprint <fp>   已核对的 SHA256:... 指纹，用于非交互首次连接
   --operation <name>         操作：health、exec 或 upload（默认：health）
   --script <python>          exec 操作使用的 Python 源码
   --script-base64 <base64>   exec 操作使用的 UTF-8 Python 源码（Base64）
@@ -90,8 +100,9 @@ TCS 主控端：tcs [options]
   tcs --host server --operation exec --script "print('hello')"
   tcs --host server --operation upload --file .\report.txt
 
-认证失败时，确认主控公钥已加入被控端 authorized_keys，且 --server-key
-指向通过可信渠道取得的被控端公钥。远程 exec 在被控端运行 Python。
+未固定公钥时会要求核对被控端指纹并确认，随后自动保存。已有身份变化时拒绝连接。
+--server-key 显式指定时保持严格校验；默认兼容旧 ~/.ssh/tcs_host_key.pub。
+远程 exec 在被控端运行 Python。
 """);
 }
 
@@ -103,6 +114,33 @@ var executableName = Path.GetFileNameWithoutExtension(Environment.ProcessPath);
 if (args.Any(argument => argument is "--help" or "-h"))
 {
     PrintHelp(string.Equals(executableName, "tcsd", StringComparison.OrdinalIgnoreCase) || args.Contains("--tcsd"));
+    return;
+}
+
+var daemonMode = args.FirstOrDefault() == "--tcsd" || string.Equals(executableName, "tcsd", StringComparison.OrdinalIgnoreCase);
+var pairingArgs = args.FirstOrDefault() is "--tcsd" or "--tcs-client" ? args[1..] : args;
+if (pairingArgs.FirstOrDefault() == "pairing")
+{
+    var export = !daemonMode && pairingArgs.ElementAtOrDefault(1) == "export";
+    var import = daemonMode && pairingArgs.ElementAtOrDefault(1) == "import";
+    if (!export && !import) throw new ArgumentException("用法：tcs pairing export --output <file>；tcsd pairing import <file>");
+    var start = import ? 3 : 2;
+    if (import && (pairingArgs.Length < 3 || pairingArgs[2].StartsWith('-'))) throw new ArgumentException("缺少要导入的配对文件。");
+    Dictionary<string, string> options = new(StringComparer.Ordinal);
+    for (var i = start; i < pairingArgs.Length; i += 2)
+    {
+        var option = pairingArgs[i];
+        var allowed = export ? option is "--output" or "--client-key" : option is "--authorized-keys" or "--host-key" or "--trust-fingerprint";
+        if (!allowed || i + 1 >= pairingArgs.Length || pairingArgs[i + 1].StartsWith("--") || !options.TryAdd(option, pairingArgs[i + 1]))
+            throw new ArgumentException($"未知、重复或缺少值的配对参数：{option}");
+    }
+    if (export)
+    {
+        if (!options.TryGetValue("--output", out var output)) throw new ArgumentException("缺少 --output <file.tcs-pair>。");
+        Pairing.Export(options.GetValueOrDefault("--client-key", SshPath("id_ed25519")), output);
+    }
+    else await Pairing.ImportAsync(pairingArgs[2], options.GetValueOrDefault("--authorized-keys", SshPath("authorized_keys")),
+        options.GetValueOrDefault("--host-key", SshPath("tcs_host_key")), options.GetValueOrDefault("--trust-fingerprint"));
     return;
 }
 
@@ -151,15 +189,27 @@ if (args.FirstOrDefault() == "--tcs-client" || string.Equals(executableName, "tc
     string Option(string name, string fallback)
     {
         var index = Array.IndexOf(args, name);
-        return index >= 0 && index + 1 < args.Length ? args[index + 1] : fallback;
+        if (index < 0) return fallback;
+        if (index + 1 >= args.Length || args[index + 1].StartsWith("--") || Array.LastIndexOf(args, name) != index)
+            throw new ArgumentException($"参数重复或缺少值：{name}");
+        return args[index + 1];
     }
 
-    var client = new tcs(
-        Option("--host", "127.0.0.1"),
-        int.Parse(Option("--port", "10122")),
-        Option("--client-key", SshPath("id_ed25519")),
-        Option("--server-key", SshPath("tcs_host_key.pub")));
     var operation = Option("--operation", "health");
+    if (operation is not ("health" or "exec" or "upload")) throw new ArgumentException($"unknown client operation: {operation}");
+    if (operation == "upload" && Option("--file", "").Length == 0) throw new ArgumentException("--file is required");
+    var host = Option("--host", "127.0.0.1");
+    var clientPort = int.Parse(Option("--port", "10122"));
+    if (clientPort is < 1 or > 65535) throw new ArgumentException("--port 必须在 1 到 65535 之间。");
+    var identity = Option("--client-key", SshPath("id_ed25519"));
+    var pinned = args.Contains("--server-key") ? Option("--server-key", "") :
+        await HostTrust.ResolveAsync(host, clientPort, identity, Option("--known-hosts", SshPath("tcs_known_hosts")),
+            args.Contains("--known-hosts") ? null : SshPath("tcs_host_key.pub"), args.Contains("--trust-fingerprint") ? Option("--trust-fingerprint", "") : null);
+    if (pinned.Length == 0) throw new ArgumentException("--server-key 缺少路径。");
+    if (args.Contains("--server-key") && args.Contains("--trust-fingerprint") &&
+        Pairing.Fingerprint(TcsCrypto.ReadPublicKeyBlob(pinned)) != Option("--trust-fingerprint", ""))
+        throw new CryptographicException("指定公钥文件与 --trust-fingerprint 不一致。");
+    var client = new tcs(host, clientPort, identity, pinned);
     if (operation == "health")
     {
         Console.WriteLine((await client.HealthAsync()).GetRawText());
