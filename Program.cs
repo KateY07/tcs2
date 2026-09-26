@@ -39,10 +39,86 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.AspNetCore.Server.Kestrel.Https;
+using Tcs;
 
+try
+{
+    await RunAsync(args);
+}
+catch (Exception exception)
+{
+    Console.Error.WriteLine($"tcs: operation failed: {exception}");
+    Environment.ExitCode = 1;
+}
+
+static void PrintHelp(bool daemon)
+{
+    Console.WriteLine(daemon ? """
+TCS 被控端：tcsd [options]
+
+选项：
+  -h, --help                    显示帮助
+  --port <1-65535>              TCP 监听端口（默认：10122）
+  --authorized-keys <path>      主控端公钥列表（默认：~/.ssh/authorized_keys）
+  --host-key <path>             被控端 OpenSSH 私钥（默认：~/.ssh/tcs_host_key）
+  --data <directory>            上传文件及审计数据目录（默认：程序目录）
+  --python <path>               Python 解释器路径（默认：PATH 中的 python）
+
+示例：
+  tcsd --data "$env:LOCALAPPDATA\TCS\data"
+  tcsd --port 10122 --authorized-keys "$env:USERPROFILE\.ssh\authorized_keys" `
+       --host-key "$env:USERPROFILE\.ssh\tcs_host_key" --data .\data
+
+保持此进程运行以接受连接。TCS 不会自动创建密钥或 authorized_keys；
+可用 ssh-keygen 生成 OpenSSH 密钥，并将主控端公钥加入授权文件。
+""" : """
+TCS 主控端：tcs [options]
+
+选项：
+  -h, --help                 显示帮助
+  --host <name-or-address>   被控端地址（默认：127.0.0.1）
+  --port <1-65535>           TCP 端口（默认：10122）
+  --client-key <path>        主控端 OpenSSH 私钥（默认：~/.ssh/id_ed25519）
+  --server-key <path>        被控端固定公钥（默认：~/.ssh/tcs_host_key.pub）
+  --operation <name>         操作：health、exec 或 upload（默认：health）
+  --script <python>          exec 操作使用的 Python 源码
+  --script-base64 <base64>   exec 操作使用的 UTF-8 Python 源码（Base64）
+  --file <path>              upload 操作要上传的文件
+
+示例：
+  tcs --host server --operation health
+  tcs --host server --operation exec --script "print('hello')"
+  tcs --host server --operation upload --file .\report.txt
+
+认证失败时，确认主控公钥已加入被控端 authorized_keys，且 --server-key
+指向通过可信渠道取得的被控端公钥。远程 exec 在被控端运行 Python。
+""");
+}
+
+static async Task RunAsync(string[] args)
+{
 var sshDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ssh");
 string SshPath(string fileName) => Path.Combine(sshDirectory, fileName);
 var executableName = Path.GetFileNameWithoutExtension(Environment.ProcessPath);
+if (args.Any(argument => argument is "--help" or "-h"))
+{
+    PrintHelp(string.Equals(executableName, "tcsd", StringComparison.OrdinalIgnoreCase) || args.Contains("--tcsd"));
+    return;
+}
+
+if (args.FirstOrDefault() == "--generate-host-key")
+{
+    if (args.Length != 2) throw new ArgumentException("Usage: --generate-host-key <path>");
+    HostKeys.CreateOrExport(args[1]);
+    return;
+}
+
+if (args.FirstOrDefault() == "--verify-install")
+{
+    if (args.Length != 5) throw new ArgumentException("Usage: --verify-install <port> <client-key> <server-key.pub> <data>");
+    await InstallVerification.RunAsync(int.Parse(args[1]), args[2], args[3], args[4]);
+    return;
+}
 
 if (args.FirstOrDefault() == "--tcsd" || string.Equals(executableName, "tcsd", StringComparison.OrdinalIgnoreCase))
 {
@@ -52,6 +128,16 @@ if (args.FirstOrDefault() == "--tcsd" || string.Equals(executableName, "tcsd", S
         return index >= 0 && index + 1 < args.Length ? args[index + 1] : fallback;
     }
 
+    var python = Option("--python", "");
+    if (python.Length > 0) Environment.SetEnvironmentVariable("TCS_PYTHON_EXE", python);
+    if (args.Contains("--service"))
+    {
+        await DaemonService.RunAsync(Option("--service-name", "tcsd"),
+            Option("--authorized-keys", SshPath("authorized_keys")),
+            Option("--host-key", SshPath("tcs_host_key")),
+            Option("--data", AppContext.BaseDirectory), int.Parse(Option("--port", "10122")));
+        return;
+    }
     var daemon = new tcsd(
         Option("--authorized-keys", SshPath("authorized_keys")),
         Option("--host-key", SshPath("tcs_host_key")),
@@ -383,4 +469,5 @@ void WriteAudit(string line)
     {
         File.AppendAllText(auditLogPath, line + Environment.NewLine);
     }
+}
 }
