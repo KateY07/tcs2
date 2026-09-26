@@ -11,12 +11,21 @@ public sealed class tcs
     readonly string privateKeyPath;
     readonly string serverPublicKeyPath;
 
+#if TCS_TESTING
     public tcs(string host, int port, string privateKeyPath, string serverPublicKeyPath)
+#else
+    public tcs(string host, int port = 10122)
+#endif
     {
         this.host = host;
         this.port = port;
+#if TCS_TESTING
         this.privateKeyPath = privateKeyPath;
         this.serverPublicKeyPath = serverPublicKeyPath;
+#else
+        privateKeyPath = Tcs.Deployment.ClientKey;
+        serverPublicKeyPath = Tcs.HostTrust.PinnedPath(host, port);
+#endif
     }
 
     public async Task<JsonElement> ExecAsync(string script, int timeoutSeconds = 30, CancellationToken cancellationToken = default)
@@ -118,8 +127,15 @@ public sealed class tcs
         return new TcsWire.Session(TcsCrypto.Derive(shared, transcript), client: true);
     }
 
+#if TCS_TESTING
     public static async Task<byte[]> InspectServerKeyAsync(string host, int port, string privateKeyPath, CancellationToken cancellationToken = default)
+#else
+    public static async Task<byte[]> InspectServerKeyAsync(string host, int port, CancellationToken cancellationToken = default)
+#endif
     {
+#if !TCS_TESTING
+        var privateKeyPath = Tcs.Deployment.ClientKey;
+#endif
         var clientBlob = TcsCrypto.PublicBlob(TcsCrypto.ReadPrivateKey(privateKeyPath));
         var (_, ephemeral) = TcsCrypto.NewEphemeral();
         var hello = TcsWire.BuildClientHello(clientBlob, ephemeral, RandomNumberGenerator.GetBytes(32));

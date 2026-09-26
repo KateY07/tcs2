@@ -1,4 +1,4 @@
-"""Exercise the published executable's failure boundary and successful protocol path."""
+"""Exercise transport failures through tests/TransportHarness.csproj; CLI restrictions use deployment_regression_test.py."""
 import concurrent.futures
 import json
 from pathlib import Path

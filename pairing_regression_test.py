@@ -1,4 +1,4 @@
-"""Exercise pairing imports and first-use host trust with isolated identities."""
+"""Exercise production classes through tests/TransportHarness.csproj with isolated identities."""
 import concurrent.futures
 import hashlib
 import json
@@ -41,6 +41,7 @@ with tempfile.TemporaryDirectory(prefix="tcs-pairing-test-") as temporary:
     client, host, other = root / "client", root / "host", root / "other"
     auth, pairing, known = root / "authorized_keys", root / "controller.tcs-pair", root / "known"
     run("--generate-host-key", client)
+    Path(str(client) + ".pub").unlink()
     run("pairing", "export", "--client-key", client, "--output", pairing)
     document = json.loads(pairing.read_text(encoding="utf-8"))
     assert set(document) == {"type", "version", "publicKey", "fingerprint"}
@@ -49,10 +50,14 @@ with tempfile.TemporaryDirectory(prefix="tcs-pairing-test-") as temporary:
     run("pairing", "export", "--client-key", client, "--output", pairing, expected=1)
     assert pairing.read_bytes() == before
     import_args = ["--tcsd", "pairing", "import", pairing, "--authorized-keys", auth, "--host-key", host]
+    run(*import_args, "--trust-fingerprint", document["fingerprint"], expected=1)
+    assert not auth.exists() and not host.exists()
+    run("--generate-host-key", host)
+    original_host = host.read_bytes()
     run(*import_args, "--trust-fingerprint", "SHA256:wrong", expected=1)
-    assert not auth.exists() and not host.exists()
+    assert not auth.exists() and host.read_bytes() == original_host
     run(*import_args, expected=1)
-    assert not auth.exists() and not host.exists()
+    assert not auth.exists() and host.read_bytes() == original_host
     run(*import_args, "--trust-fingerprint", document["fingerprint"])
     host_bytes, auth_bytes = host.read_bytes(), auth.read_bytes()
     repeated = run(*import_args)
@@ -73,6 +78,12 @@ with tempfile.TemporaryDirectory(prefix="tcs-pairing-test-") as temporary:
 
     import base64
     host_blob = base64.b64decode(Path(str(host) + ".pub").read_text().split()[1])
+    host_public = Path(str(host) + ".pub").read_bytes()
+    Path(str(host) + ".pub").unlink()
+    run(*import_args)
+    assert not Path(str(host) + ".pub").exists() and host.read_bytes() == host_bytes
+    legacy_public = root / "legacy.pub"
+    legacy_public.write_bytes(host_public)
     fingerprint = "SHA256:" + base64.b64encode(hashlib.sha256(host_blob).digest()).decode().rstrip("=")
     port = available_port()
     log = (root / "server.log").open("w", encoding="utf-8")
@@ -134,8 +145,34 @@ with tempfile.TemporaryDirectory(prefix="tcs-pairing-test-") as temporary:
         assert len(pins) == 1
         pin_bytes = pins[0].read_bytes()
         assert json.loads(run(*options).stdout)["status"] == "ok"
+        legacy = run("--host", "127.0.0.1", "--port", port, "--client-key", client,
+                     "--known-hosts", root / "unused-known", "--legacy-key", legacy_public)
+        assert "旧固定公钥正在生效" in legacy.stderr and "不会询问首次确认" in legacy.stderr
+        assert json.loads(legacy.stdout)["status"] == "ok"
         result = json.loads(run(*options, "--operation", "exec", "--script", "print('paired')").stdout)
         assert result["ExitCode"] == 0 and result["Stdout"].strip() == "paired"
+        def concurrent_operation(index):
+            marker = f"isolated-{index}"
+            executed = json.loads(run(*options, "--operation", "exec", "--script", f"print('{marker}')").stdout)
+            assert executed["ExitCode"] == 0 and executed["Stdout"].strip() == marker
+            content = (marker * 4096).encode()
+            source = root / f"source-{index}.txt"
+            source.write_bytes(content)
+            uploaded = json.loads(run(*options, "--operation", "upload", "--file", source).stdout)
+            saved = root / "data" / "uploads" / uploaded["saved"][0]
+            assert saved.read_bytes() == content
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+            list(pool.map(concurrent_operation, range(8)))
+        print("PASS concurrent Python outputs and uploaded bytes remain isolated")
+        blob = base64.b64decode(document["publicKey"].split()[1])
+        with socket.create_connection(("127.0.0.1", port), timeout=10) as partial:
+            partial.sendall(b"TCS1\x01" + struct.pack(">HHI", 1, 1, len(blob)) + blob + bytes(64))
+            prefix = read_exact(partial, 13)
+            read_exact(partial, struct.unpack(">I", prefix[-4:])[0] + 64)
+            read_exact(partial, struct.unpack(">I", read_exact(partial, 4))[0])
+            partial.sendall(b"TC")
+            partial.shutdown(socket.SHUT_WR)
+            assert partial.recv(1) == b""
         print("PASS first verified connection saves host key; later health and execution require no confirmation")
         daemon.terminate()
         daemon.wait(timeout=10)
@@ -150,4 +187,6 @@ with tempfile.TemporaryDirectory(prefix="tcs-pairing-test-") as temporary:
             daemon.terminate()
             daemon.wait(timeout=10)
         log.close()
+    assert "可能为首次指纹探测或主动取消" in (root / "server.log").read_text(encoding="utf-8")
+    assert "connection rejected" in (root / "server.log").read_text(encoding="utf-8")
 print("ALL PAIRING REGRESSION TESTS PASSED")

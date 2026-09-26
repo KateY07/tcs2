@@ -125,10 +125,15 @@ static class TcsWire
         return (blob, ephemeral, nonce, signature, raw.ToArray());
     }
 
-    public static async Task<byte[]> ReadClientAuthAsync(Stream stream, CancellationToken cancellationToken)
+    public static async Task<byte[]> ReadClientAuthAsync(Stream stream, CancellationToken cancellationToken, byte? firstByte = null)
     {
         var prefix = new byte[5];
-        await ReadExactAsync(stream, prefix, cancellationToken);
+        if (firstByte is { } value)
+        {
+            prefix[0] = value;
+            await ReadExactAsync(stream, prefix.AsMemory(1), cancellationToken);
+        }
+        else await ReadExactAsync(stream, prefix, cancellationToken);
         if (!prefix[..4].SequenceEqual(Encoding.ASCII.GetBytes("TCS1")) || prefix[4] != 0x03)
         {
             throw new InvalidDataException("invalid ClientAuth");

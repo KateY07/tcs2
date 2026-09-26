@@ -1,2 +1,5 @@
 @echo off
-"%ProgramData%\TCS\tcsd.exe" --authorized-keys "%ProgramData%\TCS\authorized_keys" --host-key "%ProgramData%\TCS\tcs_host_key" --port 10122 --data "%ProgramData%\TCS\data"
+setlocal EnableExtensions
+rem Interactive start uses the current account's fixed .ssh identity.
+"%ProgramData%\TCS\tcsd.exe"
+exit /b %errorlevel%

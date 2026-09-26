@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using Org.BouncyCastle.Crypto.Utilities;
@@ -32,8 +31,16 @@ internal static class Pairing
         if (Console.ReadLine() != "yes") throw new InvalidOperationException("已取消，未授权或保存新身份。");
     }
 
+#if TCS_TESTING
     internal static void Export(string identity, string output)
+#else
+    internal static void Export(string output)
+#endif
     {
+#if !TCS_TESTING
+        var identity = Deployment.ClientKey;
+#endif
+        Deployment.ValidatePair(identity);
         var blob = TcsCrypto.PublicBlob(TcsCrypto.ReadPrivateKey(identity));
         var line = PublicLine(blob);
         var fingerprint = Fingerprint(blob);
@@ -52,8 +59,17 @@ internal static class Pairing
         Console.WriteLine($"配对文件：{Path.GetFullPath(output)}\n主控公钥指纹：{fingerprint}\n请通过可信方式把文件交给被控端，并核对导入时显示的指纹。文件不含私钥。");
     }
 
-    internal static async Task ImportAsync(string input, string authorizedKeys, string hostKey, string? expected)
+#if TCS_TESTING
+    internal static Task ImportAsync(string input, string authorizedKeys, string hostKey, string? expected)
+#else
+    internal static Task ImportAsync(string input, string? expected)
+#endif
     {
+#if !TCS_TESTING
+        var authorizedKeys = Deployment.AuthorizedKeys;
+        var hostKey = Deployment.HostKey;
+#endif
+        Deployment.ValidatePair(hostKey);
         byte[] blob;
         using (var file = new FileStream(input, FileMode.Open, FileAccess.Read, FileShare.Read))
         {
@@ -82,33 +98,16 @@ internal static class Pairing
         Directory.CreateDirectory(Path.GetDirectoryName(hostKey)!);
         using (var keyLock = new FileStream(hostKey + ".tcs-lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
         {
-            if (!File.Exists(hostKey))
-            {
-                if (File.Exists(hostKey + ".pub")) throw new IOException("主机公钥已存在但私钥缺失。请恢复原私钥，不能自动替换已有身份。");
-                var start = new ProcessStartInfo("ssh-keygen") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
-                foreach (var argument in new[] { "-q", "-t", "ed25519", "-N", "", "-f", hostKey }) start.ArgumentList.Add(argument);
-                using var process = Process.Start(start) ?? throw new IOException("无法启动 ssh-keygen。");
-                var stdout = process.StandardOutput.ReadToEndAsync();
-                var stderr = process.StandardError.ReadToEndAsync();
-                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-                try { await process.WaitForExitAsync(timeout.Token); }
-                catch (OperationCanceledException)
-                {
-                    if (!process.HasExited) process.Kill(entireProcessTree: true);
-                    throw new TimeoutException("ssh-keygen 超时，未添加主控授权。请检查主机密钥文件。");
-                }
-                var output = await stdout;
-                var error = await stderr;
-                if (process.ExitCode != 0) throw new IOException($"ssh-keygen 失败：{output}{error}");
-            }
+            Deployment.ValidatePair(hostKey);
             var hostBlob = TcsCrypto.PublicBlob(TcsCrypto.ReadPrivateKey(hostKey));
             Directory.CreateDirectory(Path.GetDirectoryName(authorizedKeys)!);
             using var authLock = new FileStream(authorizedKeys + ".tcs-lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
             var existing = File.Exists(authorizedKeys) ? File.ReadAllText(authorizedKeys) : "";
             if (!File.Exists(authorizedKeys) || !TcsCrypto.ReadAuthorizedKeys(authorizedKeys).Any(key => key.SequenceEqual(blob)))
                 AtomicWrite(authorizedKeys, existing + (existing.Length > 0 && !existing.EndsWith('\n') ? "\n" : "") + PublicLine(blob) + "\n", true);
-            Console.WriteLine($"主控端已授权。\n被控端主机指纹：{Fingerprint(hostBlob)}\n请在主控端首次连接时核对这个指纹；无需传回回执文件。\n启动被控端：tcsd --host-key \"{hostKey}\" --authorized-keys \"{authorizedKeys}\"\n如果被控端已在运行，请重启以加载授权。");
+            Console.WriteLine($"主控端已授权。\n被控端主机指纹：{Fingerprint(hostBlob)}\n请在主控端首次连接时核对这个指纹；无需传回回执文件。\n启动被控端：tcsd\n数据固定目录：{Deployment.Data}\n如果被控端已在运行，请重启以加载授权。");
         }
+        return Task.CompletedTask;
     }
 
     internal static void AtomicWrite(string path, string text, bool overwrite)

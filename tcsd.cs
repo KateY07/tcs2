@@ -18,11 +18,20 @@ public sealed class tcsd
     readonly List<byte[]> authorizedBlobs;
     readonly object auditLock = new();
 
+#if TCS_TESTING
     public tcsd(string authorizedKeysPath, string hostPrivateKeyPath, string? dataDirectory = null)
+#else
+    public tcsd()
+#endif
     {
+#if !TCS_TESTING
+        var authorizedKeysPath = Tcs.Deployment.AuthorizedKeys;
+        var hostPrivateKeyPath = Tcs.Deployment.HostKey;
+        string? dataDirectory = null;
+#endif
         this.authorizedKeysPath = authorizedKeysPath;
         this.hostPrivateKeyPath = hostPrivateKeyPath;
-        var root = dataDirectory is null ? AppContext.BaseDirectory : Path.GetFullPath(dataDirectory);
+        var root = dataDirectory is null ? Tcs.Deployment.Data : Path.GetFullPath(dataDirectory);
         Directory.CreateDirectory(root);
         uploadsDirectory = Path.Combine(root, "uploads");
         Directory.CreateDirectory(uploadsDirectory);
@@ -37,7 +46,7 @@ public sealed class tcsd
         var listener = new TcpListener(IPAddress.IPv6Any, port);
         listener.Server.DualMode = true;
         listener.Start();
-        Console.Error.WriteLine($"被控端已启动：IPv4/IPv6 TCP {port}\n主机指纹：{Tcs.Pairing.Fingerprint(hostBlob)}\n已授权主控公钥：{authorizedBlobs.Count}\n按 Ctrl+C 停止。");
+        Console.Error.WriteLine($"被控端已启动：IPv4/IPv6 TCP {port}\n主机指纹：{Tcs.Pairing.Fingerprint(hostBlob)}\n已授权主控公钥：{authorizedBlobs.Count}\n数据目录：{Path.GetDirectoryName(auditPath)}\n按 Ctrl+C 停止。");
         try
         {
             while (!cancellationToken.IsCancellationRequested)
@@ -62,30 +71,35 @@ public sealed class tcsd
             try
             {
                 var handshake = await HandshakeAsync(stream, timeout.Token);
-                var request = await ReadRequestAsync(stream, handshake.Session, timeout.Token);
-                var response = await HandleHttpAsync(request.HttpBytes, handshake.ClientFingerprint, timeout.Token);
+                if (handshake is null) return;
+                var request = await ReadRequestAsync(stream, handshake.Value.Session, timeout.Token);
+                var response = await HandleHttpAsync(request.HttpBytes, handshake.Value.ClientFingerprint, timeout.Token);
                 for (var offset = 0; offset < response.Length;)
                 {
                     var count = Math.Min(64 * 1024, response.Length - offset);
-                    await TcsWire.WriteFrameAsync(stream, handshake.Session, TcsWire.Data, 1, response.AsMemory(offset, count), timeout.Token);
+                    await TcsWire.WriteFrameAsync(stream, handshake.Value.Session, TcsWire.Data, 1, response.AsMemory(offset, count), timeout.Token);
                     offset += count;
                 }
-                await TcsWire.WriteFrameAsync(stream, handshake.Session, TcsWire.End, 1, ReadOnlyMemory<byte>.Empty, timeout.Token);
+                await TcsWire.WriteFrameAsync(stream, handshake.Value.Session, TcsWire.End, 1, ReadOnlyMemory<byte>.Empty, timeout.Token);
             }
             catch (Exception exception) when (exception is IOException or SocketException or EndOfStreamException or CryptographicException or InvalidDataException)
             {
                 Console.Error.WriteLine($"tcsd: connection rejected: {exception.Message}");
             }
+            catch (OperationCanceledException exception)
+            {
+                Console.Error.WriteLine($"tcsd: connection ended: {(serverCancellation.IsCancellationRequested ? "服务停止" : "连接处理超过 60 秒")}；{exception.Message}");
+            }
         }
     }
 
-    async Task<(TcsWire.Session Session, string ClientFingerprint)> HandshakeAsync(NetworkStream stream, CancellationToken cancellationToken)
+    async Task<(TcsWire.Session Session, string ClientFingerprint)?> HandshakeAsync(NetworkStream stream, CancellationToken cancellationToken)
     {
         var hello = await TcsWire.ReadClientHelloAsync(stream, cancellationToken);
         var clientKey = OpenSshPublicKeyUtilities.ParsePublicKey(hello.Blob);
         if (!authorizedBlobs.Any(blob => blob.SequenceEqual(hello.Blob)))
         {
-            throw new CryptographicException("client key is not authorized");
+            throw new CryptographicException($"client key is not authorized；主控指纹 {Tcs.Pairing.Fingerprint(hello.Blob)}，请核对并导入正确的配对文件，重启 tcsd 加载授权。");
         }
         var (serverEphemeral, serverEphemeralPublic) = TcsCrypto.NewEphemeral();
         var serverNonce = RandomNumberGenerator.GetBytes(32);
@@ -93,7 +107,13 @@ public sealed class tcsd
         var signature = TcsCrypto.Sign(hostPrivate, TcsCrypto.HashLabel("TCS1/server", hello.Raw, unsigned));
         var serverHello = TcsWire.BuildServerHello(unsigned, signature);
         await TcsWire.WriteAllAsync(stream, serverHello, cancellationToken);
-        var clientSignature = await TcsWire.ReadClientAuthAsync(stream, cancellationToken);
+        var first = new byte[1];
+        if (await stream.ReadAsync(first, cancellationToken) == 0)
+        {
+            Console.Error.WriteLine("tcsd: 主机身份已发送，对端在认证前结束连接（可能为首次指纹探测或主动取消）；未认证，未执行指令或上传。此日志不表示配对已成功。");
+            return null;
+        }
+        var clientSignature = await TcsWire.ReadClientAuthAsync(stream, cancellationToken, first[0]);
         var expected = TcsCrypto.HashLabel("TCS1/client", hello.Raw, serverHello);
         if (!TcsCrypto.Verify(clientKey, expected, clientSignature))
         {

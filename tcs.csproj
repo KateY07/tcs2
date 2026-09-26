@@ -14,6 +14,9 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="tests\**" />
+    <Compile Remove="HostKeys.cs;InstallVerification.cs" />
+    <Content Remove="legacy\**;tests\**" />
     <!-- No extra NuGet packages: everything used here ships in the
          Microsoft.NET.Sdk.Web / ASP.NET Core shared framework. -->
     <Content Remove="keys\**" />
@@ -27,4 +30,8 @@
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.10" />
   </ItemGroup>
 
+  <Target Name="RejectTestPathsInProduction" BeforeTargets="CoreCompile"
+          Condition="$([System.String]::Copy('$(DefineConstants)').Contains('TCS_TESTING'))">
+    <Error Text="TCS_TESTING is only permitted in the isolated TransportHarness project." />
+  </Target>
 </Project>

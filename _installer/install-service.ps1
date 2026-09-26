@@ -1,187 +1,95 @@
 ﻿param(
-    [string]$InstallRoot = "$env:ProgramData\TCS",
     [string]$ServiceName = 'tcsd',
     [ValidateRange(1,65535)][int]$Port = 10122,
-    [string]$LegacyDirectory = "$env:LOCALAPPDATA\TCS",
-    [string]$PythonPath = '',
-    [string]$OriginalLocalAppData = $env:LOCALAPPDATA
+    [string]$PythonPath = ''
 )
-
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 if ($ServiceName -notmatch '^[A-Za-z][A-Za-z0-9_]{0,63}$') { throw 'Invalid service name' }
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = New-Object Security.Principal.WindowsPrincipal($identity)
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    # Wait for installation to finish before OneSetup removes its extracted payload.
-    $arguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -InstallRoot "{1}" -ServiceName "{2}" -Port {3} -LegacyDirectory "{4}" -PythonPath "{5}" -OriginalLocalAppData "{6}"' -f $PSCommandPath,$InstallRoot,$ServiceName,$Port,$LegacyDirectory,$PythonPath,$OriginalLocalAppData
-    try {
-        $elevated = Start-Process -FilePath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -ArgumentList $arguments -Verb RunAs -WindowStyle Hidden -Wait -PassThru
-        exit $elevated.ExitCode
-    } catch { Write-Error "Administrator approval failed: $_"; exit 1 }
+    throw 'Service installation requires an administrator. Manual installation does not.'
 }
-
-function Invoke-Native([string]$File, [string[]]$Arguments) {
-    & $File @Arguments | Out-Host
-    if ($LASTEXITCODE -ne 0) { throw "$File failed with exit code $LASTEXITCODE" }
-}
-
-function Resolve-Python {
-    $candidates = New-Object 'System.Collections.Generic.List[string]'
-    if ($PythonPath) { $candidates.Add($PythonPath) }
-    if ($env:TCS_PYTHON_EXE) { $candidates.Add($env:TCS_PYTHON_EXE) }
-    $pythonRoot = Join-Path $OriginalLocalAppData 'Programs\Python'
-    if (Test-Path -LiteralPath $pythonRoot) {
-        Get-ChildItem -LiteralPath $pythonRoot -Directory | Sort-Object Name -Descending | ForEach-Object {
-            $candidate = Join-Path $_.FullName 'python.exe'
-            if (Test-Path -LiteralPath $candidate) { $candidates.Add($candidate) }
-        }
-    }
-    foreach ($name in @('python.exe','python3.exe')) {
-        $command = Get-Command $name -ErrorAction SilentlyContinue
-        if ($command -and $command.Source -notlike '*\WindowsApps\*') { $candidates.Add($command.Source) }
-    }
-    foreach ($candidate in ($candidates | Select-Object -Unique)) {
-        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
-        $info = New-Object Diagnostics.ProcessStartInfo
-        $info.FileName = $candidate
-        $info.Arguments = '-c "import sys; print(sys.executable)"'
-        $info.UseShellExecute = $false
-        $info.CreateNoWindow = $true
-        $info.RedirectStandardOutput = $true
-        $info.RedirectStandardError = $true
-        $process = New-Object Diagnostics.Process
-        $process.StartInfo = $info
-        try {
-            $null = $process.Start()
-            $outputTask = $process.StandardOutput.ReadToEndAsync()
-            $errorTask = $process.StandardError.ReadToEndAsync()
-            if (-not $process.WaitForExit(10000)) {
-                $process.Kill()
-                Write-Warning "Python candidate timed out: $candidate"
-                continue
-            }
-            $actual = $outputTask.GetAwaiter().GetResult().Trim()
-            $errorOutput = $errorTask.GetAwaiter().GetResult()
-            if ($process.ExitCode -eq 0 -and (Test-Path -LiteralPath $actual -PathType Leaf)) { return $actual }
-            Write-Warning "Python candidate failed: $candidate $errorOutput"
-        } catch { Write-Warning "Python candidate failed: $candidate $_" }
-        finally { $process.Dispose() }
-    }
-    throw 'No usable Python was found. Install Python, or supply -PythonPath with the real python.exe path. Windows Store aliases are not accepted.'
-}
-
-function Stop-TcsService {
-    $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
-    if ($service -and $service.Status -ne 'Stopped') {
-        Stop-Service -Name $ServiceName -ErrorAction Stop
-        $service.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30))
+# LocalSystem is the service account; these are its fixed profile locations.
+$serviceProfile = Join-Path $env:SystemRoot 'System32\config\systemprofile'
+$sshDirectory = Join-Path $serviceProfile '.ssh'
+$hostKey = Join-Path $sshDirectory 'tcs_host_key'
+$authorized = Join-Path $sshDirectory 'authorized_keys'
+$data = Join-Path $serviceProfile 'AppData\Local\TCS\data'
+$installRoot = Join-Path $env:ProgramData 'TCS'
+$exe = Join-Path $installRoot 'tcsd.exe'
+$payload = Join-Path $PSScriptRoot 'tcsd.exe'
+foreach ($required in @($hostKey,$authorized,$payload)) {
+    if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
+        throw "Required file missing: $required. Prepare the service account's fixed .ssh identity and authorizations first. Nothing has been installed; keys are never generated or copied."
     }
 }
-
-function Wait-Listener {
-    for ($i=0; $i -lt 30; $i++) {
-        $serviceInfo = Get-CimInstance Win32_Service -Filter "Name='$ServiceName'"
-        $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
-        if ($serviceInfo.State -eq 'Running' -and $serviceInfo.ProcessId -gt 0 -and
-            @($listeners | Where-Object { $_.OwningProcess -eq $serviceInfo.ProcessId -and $_.LocalAddress -eq '::' }).Count -gt 0) { return }
-        Start-Sleep -Seconds 1
-    }
-    throw "Service is not listening on dual-stack TCP $Port. See data\service.log."
-}
-
-$transcriptStarted = $false
-$temporaryKey = $null
-$authorizedBeforeTest = $null
-$serviceChanged = $false
-$success = $false
-$authorizedPath = Join-Path $InstallRoot 'authorized_keys'
-$utf8 = New-Object Text.UTF8Encoding($false)
+# Derive only in memory; no .pub requirement, no key creation or modification.
+$keyProbe = New-Object Diagnostics.Process
+$keyProbe.StartInfo = New-Object Diagnostics.ProcessStartInfo
+$keyProbe.StartInfo.FileName = 'ssh-keygen.exe'
+$keyProbe.StartInfo.Arguments = '-y -P "" -f "{0}"' -f $hostKey
+$keyProbe.StartInfo.UseShellExecute = $false
+$keyProbe.StartInfo.CreateNoWindow = $true
+$keyProbe.StartInfo.RedirectStandardOutput = $true
+$keyProbe.StartInfo.RedirectStandardError = $true
 try {
-    $InstallRoot = [IO.Path]::GetFullPath($InstallRoot)
-    if ($InstallRoot -eq [IO.Path]::GetPathRoot($InstallRoot)) { throw 'A drive root cannot be an installation directory' }
-    $null = New-Item -ItemType Directory -Path $InstallRoot -Force
-    if ((Get-Item -LiteralPath $InstallRoot).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Installation directory cannot be a reparse point' }
-    $acl = New-Object Security.AccessControl.DirectorySecurity
-    $acl.SetAccessRuleProtection($true,$false)
-    foreach ($sid in @('S-1-5-18','S-1-5-32-544')) {
-        $rule = New-Object Security.AccessControl.FileSystemAccessRule(
-            (New-Object Security.Principal.SecurityIdentifier($sid)), 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
-        $acl.AddAccessRule($rule)
+    $null = $keyProbe.Start()
+    $publicTask = $keyProbe.StandardOutput.ReadToEndAsync()
+    $errorTask = $keyProbe.StandardError.ReadToEndAsync()
+    if (-not $keyProbe.WaitForExit(15000)) {
+        $keyProbe.Kill()
+        throw 'Private-key validation timed out; nothing has been installed.'
     }
-    Set-Acl -LiteralPath $InstallRoot -AclObject $acl
-    Start-Transcript -Path (Join-Path $InstallRoot 'install.log') -Append | Out-Host
+    if ($keyProbe.ExitCode -ne 0) { throw ('Invalid service private key: ' + $errorTask.Result) }
+    if (-not $publicTask.Result) { throw 'No public key could be derived from the service private key.' }
+} finally { $keyProbe.Dispose() }
+if (-not ([IO.File]::ReadAllText($authorized).Trim())) { throw 'The fixed authorized_keys file is empty.' }
+if (-not $PythonPath) {
+    $PythonPath = (Get-Command python.exe -ErrorAction Stop).Source
+}
+$PythonPath = (Get-Item -LiteralPath $PythonPath -ErrorAction Stop).FullName
+$existing = Get-CimInstance Win32_Service -Filter "Name='$ServiceName'"
+if ($existing -and $existing.PathName -notlike "*$exe*") { throw 'Service name belongs to another installation.' }
+foreach ($listener in @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)) {
+    if (-not $existing -or $listener.OwningProcess -ne $existing.ProcessId) {
+        throw "TCP $Port is occupied by an unrelated process. Stop it explicitly before installation."
+    }
+}
+$null = New-Item -ItemType Directory -Path $installRoot -Force
+if ((Get-Item -LiteralPath $installRoot).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Installation directory cannot be a reparse point.' }
+$acl = New-Object Security.AccessControl.DirectorySecurity
+$acl.SetAccessRuleProtection($true,$false)
+foreach ($sid in @('S-1-5-18','S-1-5-32-544')) {
+    $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
+        (New-Object Security.Principal.SecurityIdentifier($sid)), 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
+}
+Set-Acl -LiteralPath $installRoot -AclObject $acl
+$transcriptStarted = $false
+try {
+    Start-Transcript -Path (Join-Path $installRoot 'install.log') -Append | Out-Host
     $transcriptStarted = $true
-    Write-Host 'Installing TCS as a LocalSystem service with automatic startup.'
-    $python = Resolve-Python
-    Write-Host "Python selected: $python"
-    $payloadExe = Join-Path $PSScriptRoot 'tcsd.exe'
-    $controllerFile = Join-Path $PSScriptRoot 'controller.pub'
-    if (-not (Test-Path -LiteralPath $payloadExe)) { throw 'Missing tcsd.exe payload' }
-    $controller = [IO.File]::ReadAllText($controllerFile).Trim()
-    if ($controller -notmatch '^ssh-ed25519\s+[A-Za-z0-9+/=]+(?:\s+.*)?$') { throw 'Invalid controller public key' }
-    $exe = Join-Path $InstallRoot 'tcsd.exe'
-    $hostKey = Join-Path $InstallRoot 'tcs_host_key'
-    $data = Join-Path $InstallRoot 'data'
-    $existingService = Get-CimInstance Win32_Service -Filter "Name='$ServiceName'"
-    if ($existingService -and $existingService.PathName -notlike "*$exe*") { throw "Service name $ServiceName is already used by another installation" }
-    $legacyExe = Join-Path $LegacyDirectory 'tcsd.exe'
-    $legacyProcesses = @(Get-CimInstance Win32_Process -Filter "Name='tcsd.exe'" | Where-Object { $_.ExecutablePath -eq $legacyExe -and (Test-Path -LiteralPath $legacyExe) })
-    $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
-    foreach ($listener in $listeners) {
-        $ownedByService = $existingService -and $listener.OwningProcess -eq $existingService.ProcessId
-        if (-not $ownedByService -and $listener.OwningProcess -notin @($legacyProcesses | ForEach-Object { $_.ProcessId })) { throw "TCP $Port is occupied by unrelated process $($listener.OwningProcess)" }
-    }
-    Stop-TcsService
-    foreach ($process in $legacyProcesses) {
-        Write-Host "Stopping previous manual TCS instance: $($process.ProcessId)"
-        Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
+    if ($existing) {
+        $service = Get-Service -Name $ServiceName
+        if ($service.Status -ne 'Stopped') {
+            Stop-Service -Name $ServiceName
+            $service.WaitForStatus('Stopped',[TimeSpan]::FromSeconds(30))
+        }
     }
     if (Test-Path -LiteralPath $exe) {
-        Copy-Item -LiteralPath $exe -Destination ($exe + '.' + [DateTime]::UtcNow.ToString('yyyyMMddHHmmssfff') + '.bak')
+        Copy-Item -LiteralPath $exe -Destination ($exe+'.'+[guid]::NewGuid().ToString('N')+'.bak')
     }
-    Copy-Item -LiteralPath $payloadExe -Destination $exe -Force
-    # Prefer the already-trusted manual installation host key, preserving its identity.
-    $legacyHostKey = Join-Path $LegacyDirectory 'tcs_host_key'
-    $installedMarker = Join-Path $InstallRoot 'service-install.complete'
-    if ((Test-Path -LiteralPath $legacyHostKey) -and -not (Test-Path -LiteralPath $installedMarker)) {
-        if (Test-Path -LiteralPath $hostKey) {
-            Copy-Item -LiteralPath $hostKey -Destination ($hostKey + '.' + [Guid]::NewGuid().ToString('N') + '.bak')
-        }
-        Copy-Item -LiteralPath $legacyHostKey -Destination $hostKey -Force
-        Write-Host 'Preserved host key from manual installation.'
-    }
-    Invoke-Native $exe @('--generate-host-key',$hostKey)
-    $existingKeys = if (Test-Path -LiteralPath $authorizedPath) { [IO.File]::ReadAllText($authorizedPath) } else { '' }
-    $legacyAuthorized = Join-Path $LegacyDirectory 'authorized_keys'
-    if (Test-Path -LiteralPath $legacyAuthorized) { $existingKeys += "`r`n" + [IO.File]::ReadAllText($legacyAuthorized) }
-    $keyLines = @(($existingKeys + "`r`n" + $controller) -split '\r?\n' | Where-Object { $_.Trim().Length -gt 0 } | Select-Object -Unique)
-    $authorizedBeforeTest = ($keyLines -join "`r`n") + "`r`n"
-    [IO.File]::WriteAllText($authorizedPath,$authorizedBeforeTest,$utf8)
-    $temporaryKey = Join-Path $InstallRoot ('installation-check-' + [Guid]::NewGuid().ToString('N'))
-    Invoke-Native $exe @('--generate-host-key',$temporaryKey)
-    [IO.File]::AppendAllText($authorizedPath,[IO.File]::ReadAllText($temporaryKey+'.pub'),$utf8)
-    # Never reset to potentially permissive inherited ACLs, even temporarily.
-    $fileAcl = New-Object Security.AccessControl.FileSecurity
-    $fileAcl.SetAccessRuleProtection($true,$false)
-    foreach ($sid in @('S-1-5-18','S-1-5-32-544')) {
-        $fileAcl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
-            (New-Object Security.Principal.SecurityIdentifier($sid)), 'FullControl', 'Allow')))
-    }
-    foreach ($child in Get-ChildItem -LiteralPath $InstallRoot -Recurse -Force) {
-        if ($child.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Reparse point is not allowed in installation: $($child.FullName)" }
-        if ($child.PSIsContainer) { Set-Acl -LiteralPath $child.FullName -AclObject $acl }
-        else { Set-Acl -LiteralPath $child.FullName -AclObject $fileAcl }
-    }
-    $binaryPath = '"{0}" --service --service-name "{1}" --authorized-keys "{2}" --host-key "{3}" --port {4} --data "{5}" --python "{6}"' -f $exe,$ServiceName,$authorizedPath,$hostKey,$Port,$data,$python
-    if ($existingService) {
-        $changed = Invoke-CimMethod -InputObject $existingService -MethodName Change -Arguments @{ PathName=$binaryPath; StartMode='Automatic'; StartName='LocalSystem' }
+    Copy-Item -LiteralPath $payload -Destination $exe -Force
+    $binaryPath = '"{0}" --service --service-name "{1}" --port {2} --python "{3}"' -f $exe,$ServiceName,$Port,$PythonPath
+    if ($existing) {
+        $changed = Invoke-CimMethod -InputObject $existing -MethodName Change -Arguments @{PathName=$binaryPath;StartMode='Automatic';StartName='LocalSystem'}
         if ($changed.ReturnValue -ne 0) { throw "Service configuration failed: $($changed.ReturnValue)" }
     } else {
         New-Service -Name $ServiceName -BinaryPathName $binaryPath -DisplayName "TCS Controlled Endpoint ($ServiceName)" -StartupType Automatic | Out-Host
     }
-    $serviceChanged = $true
-    Invoke-Native 'sc.exe' @('failure',$ServiceName,'reset=','86400','actions=','restart/5000/restart/15000/restart/60000')
+    & sc.exe failure $ServiceName reset= 86400 actions= restart/5000/restart/15000/restart/60000
+    if ($LASTEXITCODE -ne 0) { throw 'Service recovery configuration failed.' }
     $ruleName = "TCS-$ServiceName-TCP-$Port"
     $rule = Get-NetFirewallRule -Name $ruleName -ErrorAction SilentlyContinue
     if ($rule) {
@@ -190,36 +98,25 @@ try {
         New-NetFirewallRule -Name $ruleName -DisplayName "TCS $ServiceName TCP $Port" -Direction Inbound -Action Allow -Profile Any -Protocol TCP -LocalPort $Port -Program $exe | Out-Host
     }
     Start-Service -Name $ServiceName
-    Wait-Listener
-    Invoke-Native $exe @('--verify-install',"$Port",$temporaryKey,($hostKey+'.pub'),$data)
-    # Revoke the temporary installation identity both on disk and in the running service.
-    Stop-TcsService
-    [IO.File]::WriteAllText($authorizedPath,$authorizedBeforeTest,$utf8)
-    Remove-Item -LiteralPath $temporaryKey,($temporaryKey+'.pub') -Force
-    $temporaryKey = $null
-    Start-Service -Name $ServiceName
-    Wait-Listener
-    $finalRule = Get-NetFirewallRule -Name $ruleName
-    if ($finalRule.Enabled -ne 'True' -or $finalRule.Action -ne 'Allow') { throw 'Firewall rule verification failed' }
-    [IO.File]::WriteAllText($installedMarker,[DateTimeOffset]::UtcNow.ToString('O'),$utf8)
-    $success = $true
-    Write-Host "SUCCESS: $ServiceName is running, starts automatically, listens on TCP $Port, and passed authenticated IPv4/IPv6, Python and upload checks."
-    Write-Host "Host public key: $hostKey.pub"
+    $ready = $false
+    for ($i=0; $i -lt 30; $i++) {
+        $running = Get-CimInstance Win32_Service -Filter "Name='$ServiceName'"
+        $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
+        if ($running.State -eq 'Running' -and $running.ProcessId -gt 0 -and
+            @($listeners | Where-Object { $_.OwningProcess -eq $running.ProcessId -and $_.LocalAddress -eq '::' }).Count) {
+            $ready = $true
+            break
+        }
+        Start-Sleep -Seconds 1
+    }
+    if (-not $ready) { throw "Service did not start listening. See $data\service.log" }
+    Write-Host "Service installed and listening. Fixed identity: $hostKey"
     Write-Host "Service log: $data\service.log"
+    Write-Host 'Authenticated connection, Python execution and upload must be tested separately from the controller.'
 } catch {
     Write-Host "INSTALLATION FAILED: $_" -ForegroundColor Red
     Write-Host $_.ScriptStackTrace
+    throw
 } finally {
-    if (-not $success -and $temporaryKey) {
-        try {
-            if ($serviceChanged) { Stop-TcsService }
-            if ($null -ne $authorizedBeforeTest) { [IO.File]::WriteAllText($authorizedPath,$authorizedBeforeTest,$utf8) }
-            foreach ($path in @($temporaryKey,($temporaryKey+'.pub'))) {
-                if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
-            }
-        } catch { Write-Host "Temporary identity cleanup failed: $_" -ForegroundColor Red }
-    }
     if ($transcriptStarted) { Stop-Transcript | Out-Host }
 }
-if (-not $success) { exit 1 }
-exit 0

@@ -2,11 +2,12 @@ using System.Net;
 
 namespace Tcs;
 
-internal sealed class DaemonService(string authorizedKeys, string hostKey, string data, int port) : BackgroundService
+internal sealed class DaemonService(int port) : BackgroundService
 {
-    internal static async Task RunAsync(string name, string authorizedKeys, string hostKey, string data, int port)
+    internal static async Task RunAsync(string name, int port)
     {
         if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("Windows service mode requires Windows");
+        var data = Deployment.Data;
         Directory.CreateDirectory(data);
         using var log = new StreamWriter(Path.Combine(data, "service.log"), append: true) { AutoFlush = true };
         var originalError = Console.Error;
@@ -19,7 +20,7 @@ internal sealed class DaemonService(string authorizedKeys, string hostKey, strin
                 Args = []
             });
             builder.Services.AddWindowsService(options => options.ServiceName = name);
-            builder.Services.AddSingleton<IHostedService>(_ => new DaemonService(authorizedKeys, hostKey, data, port));
+            builder.Services.AddSingleton<IHostedService>(_ => new DaemonService(port));
             using var host = builder.Build();
             await host.RunAsync();
         }
@@ -31,7 +32,7 @@ internal sealed class DaemonService(string authorizedKeys, string hostKey, strin
         try
         {
             Console.Error.WriteLine($"{DateTimeOffset.UtcNow:O} Starting TCS on dual-stack TCP {port}");
-            var daemon = new global::tcsd(authorizedKeys, hostKey, data);
+            var daemon = new global::tcsd();
             await daemon.RunAsync(IPAddress.IPv6Any, port, stoppingToken);
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
