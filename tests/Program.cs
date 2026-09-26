@@ -4,6 +4,25 @@ using Tcs;
 
 try
 {
+    if (args[0] == "--test-cli")
+    {
+        await CliTests.RunAsync();
+        return;
+    }
+    if (args[0] == "--cli-fixture")
+    {
+        var parsed = CliArguments.Parse(args[3..]);
+        var testClient = new tcs(parsed["--host"], int.Parse(parsed.GetValueOrDefault("--port", "10122")), args[1], args[2]);
+        var response = parsed["--operation"] switch
+        {
+            "health" => await testClient.HealthAsync(),
+            "exec" => await testClient.ExecAsync(await CliArguments.ReadScriptAsync(parsed)),
+            "upload" => await testClient.UploadAsync(Path.GetFileName(parsed["--file"]), await File.ReadAllBytesAsync(parsed["--file"])),
+            _ => throw new ArgumentException("Unknown operation")
+        };
+        Console.WriteLine(response.GetRawText());
+        return;
+    }
     if (args[0] == "--audit-production")
     {
         var assembly = System.Reflection.Assembly.LoadFrom(Path.GetFullPath(args[1]));

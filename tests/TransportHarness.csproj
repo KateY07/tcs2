@@ -9,6 +9,7 @@
     <DefineConstants>$(DefineConstants);TCS_TESTING</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="../CliArguments.cs" />
     <PackageReference Include="BouncyCastle.Cryptography" Version="2.7.0" />
     <Compile Include="../tcs.cs;../tcsd.cs;../TcsCrypto.cs;../TcsWire.cs;../TcsJson.cs;../Pairing.cs;../HostTrust.cs;../HostKeys.cs;../Deployment.cs;../InstallVerification.cs" />
   </ItemGroup>

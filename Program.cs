@@ -37,7 +37,8 @@ TCS 被控端：tcsd [options]
 数据固定为 %LOCALAPPDATA%\TCS\data，不允许指定其他目录。
 安装前必须由用户生成密钥；导入及启动均不会自动生成密钥。保持窗口运行。
 """ : """
-TCS 主控端：tcs [options]
+TCS 主控端：tcs <host> [health|exec|upload] [options]
+兼容原有形式：tcs [options]
 
 配对导出：
   tcs pairing export --output <file.tcs-pair>
@@ -50,12 +51,17 @@ TCS 主控端：tcs [options]
   --operation <name>         操作：health、exec 或 upload（默认：health）
   --script <python>          exec 操作使用的 Python 源码
   --script-base64 <base64>   exec 操作使用的 UTF-8 Python 源码（Base64）
-  --file <path>              upload 操作要上传的文件
+  --file <path>              exec 的本地 UTF-8 Python 文件，或 upload 要上传的文件
 
 示例：
-  tcs --host server --operation health
-  tcs --host server --operation exec --script "print('hello')"
-  tcs --host server --operation upload --file .\report.txt
+  tcs alipc health
+  tcs alipc exec "print('hello')"
+  tcs alipc exec --file "test.py"
+  tcs alipc upload .\demo.txt
+  tcs alipc health --port 10122
+
+省略操作时默认 health。exec --file 读取主控本地文件，仅将源码发送至被控端执行；不自动传输依赖。
+源码、--file 和 --script-base64 只能选择一种。旧参数形式仍可使用。
 
 未固定公钥时会要求核对被控端指纹并确认，随后自动保存。已有身份变化时拒绝连接。
 固定位置：%USERPROFILE%\.ssh\id_ed25519、.ssh\tcs_known_hosts。
@@ -108,7 +114,8 @@ if (pairingArgs.FirstOrDefault() == "pairing")
     return;
 }
 
-for (var i = args.FirstOrDefault() is "--tcsd" or "--tcs-client" ? 1 : 0; i < args.Length; i++)
+var clientOptions = daemonMode ? null : CliArguments.Parse(args);
+for (var i = args.FirstOrDefault() is "--tcsd" or "--tcs-client" ? 1 : 0; daemonMode && i < args.Length; i++)
 {
     var option = args[i];
     if (daemonMode && option == "--service") continue;
@@ -145,14 +152,7 @@ if (args.FirstOrDefault() == "--tcsd" || string.Equals(executableName, "tcsd", S
 
 if (!daemonMode)
 {
-    string Option(string name, string fallback)
-    {
-        var index = Array.IndexOf(args, name);
-        if (index < 0) return fallback;
-        if (index + 1 >= args.Length || args[index + 1].StartsWith("--") || Array.LastIndexOf(args, name) != index)
-            throw new ArgumentException($"参数重复或缺少值：{name}");
-        return args[index + 1];
-    }
+    string Option(string name, string fallback) => clientOptions!.GetValueOrDefault(name, fallback);
 
     var operation = Option("--operation", "health");
     if (operation is not ("health" or "exec" or "upload")) throw new ArgumentException($"unknown client operation: {operation}");
@@ -160,9 +160,11 @@ if (!daemonMode)
     var host = Option("--host", "127.0.0.1");
     var clientPort = int.Parse(Option("--port", "10122"));
     if (clientPort is < 1 or > 65535) throw new ArgumentException("--port 必须在 1 到 65535 之间。");
+    var script = operation == "exec" ? await CliArguments.ReadScriptAsync(clientOptions!) : null;
+    var uploadBytes = operation == "upload" ? await File.ReadAllBytesAsync(Option("--file", "")) : null;
     var identity = Deployment.ClientKey;
     Deployment.ValidatePair(identity);
-    await HostTrust.ResolveAsync(host, clientPort, args.Contains("--trust-fingerprint") ? Option("--trust-fingerprint", "") : null);
+    await HostTrust.ResolveAsync(host, clientPort, clientOptions!.GetValueOrDefault("--trust-fingerprint"));
     var client = new tcs(host, clientPort);
     if (operation == "health")
     {
@@ -170,9 +172,7 @@ if (!daemonMode)
     }
     else if (operation == "exec")
     {
-        var encodedScript = Option("--script-base64", "");
-        var script = encodedScript.Length == 0 ? Option("--script", "print('ok')") : Encoding.UTF8.GetString(Convert.FromBase64String(encodedScript));
-        Console.WriteLine((await client.ExecAsync(script)).GetRawText());
+        Console.WriteLine((await client.ExecAsync(script!)).GetRawText());
     }
     else if (operation == "upload")
     {
@@ -181,7 +181,7 @@ if (!daemonMode)
         {
             throw new ArgumentException("--file is required");
         }
-        Console.WriteLine((await client.UploadAsync(Path.GetFileName(path), await File.ReadAllBytesAsync(path))).GetRawText());
+        Console.WriteLine((await client.UploadAsync(Path.GetFileName(path), uploadBytes!)).GetRawText());
     }
     else
     {

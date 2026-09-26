@@ -69,7 +69,7 @@ if ((Test-Path -LiteralPath $tcsKey) -or (Test-Path -LiteralPath ($tcsKey + '.pu
 
 ## 3. 安装（无需管理员权限）
 
-从 [GitHub Releases](https://github.com/KateY07/tcs2/releases) 获取发布包；当前开发包名为 tcs-manual-2026.09.26.6.exe，是否已上传以 Release 页面为准。两端分别双击安装程序，选择 C（主控端）或 S（被控端）。选择决定检查哪个私钥，同一安装包包含两个程序。
+从 [GitHub Releases](https://github.com/KateY07/tcs2/releases) 获取发布包；当前版本安装包为 tcs-manual-2026.09.26.7.exe。两端分别双击安装程序，选择 C（主控端）或 S（被控端）。选择决定检查哪个私钥，同一安装包包含两个程序。
 
 安装程序只检查固定位置的私钥是否可读取、格式及签名是否可用，公钥和指纹直接从私钥推导。私钥缺失、损坏或带口令时停止，显示错误和供全新用户复制的生成脚本；已有身份应恢复原私钥。不会继续复制程序或修改用户 Path，也不会自动执行生成命令。不要求同名 .pub 存在。
 
@@ -114,7 +114,7 @@ tcsd
 主控端执行（默认就是健康检查）：
 
 ~~~powershell
-tcs --host server
+tcs server health
 ~~~
 
 首次连接先验证被控端握手签名，再显示指纹。与被控端屏幕或其他可信渠道提供的指纹核对，输入 yes，保存后重新建立认证连接，成功返回：
@@ -146,7 +146,7 @@ tcs --host server
 用记事本创建 demo.txt，在主控端执行（路径换成实际文件）：
 
 ~~~powershell
-tcs --host server --operation upload --file "$env:USERPROFILE\Documents\demo.txt"
+tcs server upload "$env:USERPROFILE\Documents\demo.txt"
 ~~~
 
 固定保存到被控端 %LOCALAPPDATA%\TCS\data\uploads；响应 saved 给出实际文件名。名称带唯一标识，不直接覆盖同名文件。上传不执行内容。
@@ -158,10 +158,22 @@ tcs --host server --operation upload --file "$env:USERPROFILE\Documents\demo.txt
 主控端执行，让被控端 ping 自己的回环地址四次：
 
 ~~~powershell
-tcs --host server --operation exec --script "import subprocess; r = subprocess.run(['ping.exe', '-n', '4', '127.0.0.1']); raise SystemExit(r.returncode)"
+tcs server exec "import subprocess; r = subprocess.run(['ping.exe', '-n', '4', '127.0.0.1']); raise SystemExit(r.returncode)"
 ~~~
 
---script 是 Python 源码，不是 shell 命令。响应含 ExitCode、Stdout、Stderr、TimedOut，需检查字段判断结果；默认执行超时 30 秒。
+exec 的内容是 Python 源码，不是 shell 命令。响应含 ExitCode、Stdout、Stderr、TimedOut，需检查字段判断结果；默认执行超时 30 秒。
+
+也可以执行主控端已有的 Python 文件（UTF-8，可带 BOM）：
+
+~~~powershell
+tcs server exec --file "test.py"
+~~~
+
+文件路径相对于主控终端当前目录，含空格时加引号。仅发送源码在被控端执行，不自动上传依赖、设置脚本所在目录或传递脚本参数；被控端仍须安装相应 Python 依赖。缺失文件、无效 UTF-8 和冲突参数在连接前报错。
+
+将 server 替换为被控端名称或 IP，例如 `tcs alipc health`。省略操作的 `tcs alipc` 也是健康检查。非默认端口可写 `tcs alipc health --port 3388`。
+
+原有 `tcs --host server --operation health`、`--operation exec --script "print('hello')"`、`--operation upload --file .\demo.txt` 形式仍兼容。exec 的源码、`--file`、`--script-base64` 三种输入不能混用，位置参数与同名选项也不能重复指定。密钥固定路径和首次信任校验规则不变。
 
 ## 8. 故障和升级
 
