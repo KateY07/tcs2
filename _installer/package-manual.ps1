@@ -1,6 +1,6 @@
 ﻿param([string]$Version='2026.09.24.2')
 $ErrorActionPreference='Stop'
-if (-not $PSBoundParameters.ContainsKey('Version')) { $Version='2026.10.20.1' }
+if (-not $PSBoundParameters.ContainsKey('Version')) { $Version='2026.10.20.2' }
 if ($Version -notmatch '^[A-Za-z0-9._-]+$') { throw 'Invalid version' }
 $repo=Split-Path $PSScriptRoot -Parent
 $release="D:\pub\tcs\$Version.zip"
@@ -17,7 +17,9 @@ Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install-user.bat') -Destination
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'set-user-path.ps1') -Destination $payload
 $names=@(Get-ChildItem -LiteralPath $payload -Force | Select-Object -ExpandProperty Name)
 if ($names.Count -ne 5 -or @($names | Where-Object { $_ -notin @('tcs.exe','tcsd.exe','README.md','install.bat','set-user-path.ps1') }).Count) { throw 'Unexpected package contents' }
-& dotnet (Join-Path $repo '_package\onesetup.dll') $payload -o $installer
+$onesetup=Join-Path $repo '_package\onesetup.exe'   # onesetup v3.pre10 or newer (--ui)
+if (-not (Test-Path -LiteralPath $onesetup)) { throw "onesetup.exe missing: $onesetup" }
+& $onesetup $payload -o $installer --ui
 if ($LASTEXITCODE) { throw 'OneSetup packaging failed' }
 $null=New-Item -ItemType Directory -Path (Split-Path $release -Parent) -Force
 Compress-Archive -LiteralPath $installer,(Join-Path $repo 'README.md') -DestinationPath $release
