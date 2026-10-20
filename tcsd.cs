@@ -65,6 +65,7 @@ public sealed class tcsd
     {
         using (client)
         {
+            client.NoDelay = true;
             await using var stream = client.GetStream();
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(serverCancellation);
             timeout.CancelAfter(TimeSpan.FromSeconds(60));
@@ -215,7 +216,8 @@ public sealed class tcsd
         var started = Stopwatch.StartNew();
         try
         {
-            var result = await RunPythonAsync(scriptPath, TimeSpan.FromSeconds(request.TimeoutSeconds is > 0 ? request.TimeoutSeconds.Value : 30), cancellationToken);
+            var result = await RunPythonAsync(scriptPath, TimeSpan.FromSeconds(request.TimeoutSeconds is > 0 ? request.TimeoutSeconds.Value : 30),
+                request.MaxOutput is >= 0 ? request.MaxOutput.Value : Tcs.OutputCap.DefaultLimit, cancellationToken);
             started.Stop();
             WriteAudit(JsonSerializer.Serialize(
                 new TcsExecAudit(DateTimeOffset.UtcNow, "/v1/exec", fingerprint, started.ElapsedMilliseconds, result.ExitCode, result.TimedOut),
@@ -291,8 +293,9 @@ public sealed class tcsd
         return -1;
     }
 
-    async Task<ExecResult> RunPythonAsync(string scriptPath, TimeSpan timeout, CancellationToken cancellationToken)
+    async Task<ExecResult> RunPythonAsync(string scriptPath, TimeSpan timeout, int maxOutput, CancellationToken cancellationToken)
     {
+        var elapsed = Stopwatch.StartNew();
         var startInfo = new ProcessStartInfo
         {
             FileName = Environment.GetEnvironmentVariable("TCS_PYTHON_EXE") is { Length: > 0 } configured ? configured : "python",
@@ -304,8 +307,8 @@ public sealed class tcsd
         startInfo.ArgumentList.Add(scriptPath);
         using var process = new Process { StartInfo = startInfo };
         process.Start();
-        var stdout = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var stderr = process.StandardError.ReadToEndAsync(cancellationToken);
+        var stdout = Tcs.OutputCap.ReadAsync(process.StandardOutput, maxOutput, cancellationToken);
+        var stderr = Tcs.OutputCap.ReadAsync(process.StandardError, maxOutput, cancellationToken);
         using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutSource.CancelAfter(timeout);
         var timedOut = false;
@@ -318,7 +321,9 @@ public sealed class tcsd
             timedOut = true;
             process.Kill(entireProcessTree: true);
         }
-        return new ExecResult(timedOut ? null : process.ExitCode, await stdout, await stderr, timedOut);
+        var (outText, outOmitted) = await stdout;
+        var (errText, errOmitted) = await stderr;
+        return new ExecResult(timedOut ? null : process.ExitCode, outText, errText, timedOut, outOmitted, errOmitted, elapsed.ElapsedMilliseconds);
     }
 
     void WriteAudit(string line)

@@ -28,10 +28,10 @@ public sealed class tcs
 #endif
     }
 
-    public async Task<JsonElement> ExecAsync(string script, int timeoutSeconds = 30, CancellationToken cancellationToken = default)
+    public async Task<JsonElement> ExecAsync(string script, int timeoutSeconds = 30, CancellationToken cancellationToken = default, int? maxOutput = null)
     {
         var body = JsonSerializer.SerializeToUtf8Bytes(
-            new ClientExecRequest(script, timeoutSeconds),
+            new ClientExecRequest(script, timeoutSeconds, maxOutput),
             TcsJsonContext.Default.ClientExecRequest);
         var response = await RequestAsync(BuildRequest("POST", "/v1/exec", "application/json", body), cancellationToken);
         EnsureSuccess(response);
@@ -61,7 +61,7 @@ public sealed class tcs
 
     async Task<Response> RequestAsync(byte[] request, CancellationToken cancellationToken)
     {
-        using var tcp = new TcpClient(AddressFamily.InterNetworkV6);
+        using var tcp = new TcpClient(AddressFamily.InterNetworkV6) { NoDelay = true };
         tcp.Client.DualMode = true;
         await tcp.ConnectAsync(host, port, cancellationToken);
         await using var stream = tcp.GetStream();
@@ -139,7 +139,7 @@ public sealed class tcs
         var clientBlob = TcsCrypto.PublicBlob(TcsCrypto.ReadPrivateKey(privateKeyPath));
         var (_, ephemeral) = TcsCrypto.NewEphemeral();
         var hello = TcsWire.BuildClientHello(clientBlob, ephemeral, RandomNumberGenerator.GetBytes(32));
-        using var tcp = new TcpClient(AddressFamily.InterNetworkV6);
+        using var tcp = new TcpClient(AddressFamily.InterNetworkV6) { NoDelay = true };
         tcp.Client.DualMode = true;
         await tcp.ConnectAsync(host, port, cancellationToken);
         await using var stream = tcp.GetStream();

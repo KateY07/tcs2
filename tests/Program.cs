@@ -13,14 +13,40 @@ try
     {
         var parsed = CliArguments.Parse(args[3..]);
         var testClient = new tcs(parsed["--host"], int.Parse(parsed.GetValueOrDefault("--port", "10122")), args[1], args[2]);
+        var started = System.Diagnostics.Stopwatch.StartNew();
         var response = parsed["--operation"] switch
         {
             "health" => await testClient.HealthAsync(),
-            "exec" => await testClient.ExecAsync(await CliArguments.ReadScriptAsync(parsed)),
+            "exec" => await testClient.ExecAsync(await CliArguments.ReadScriptAsync(parsed), 30, default,
+                parsed.TryGetValue("--max-output", out var cap) ? int.Parse(cap) : null),
             "upload" => await testClient.UploadAsync(Path.GetFileName(parsed["--file"]), await File.ReadAllBytesAsync(parsed["--file"])),
             _ => throw new ArgumentException("Unknown operation")
         };
-        Console.WriteLine(response.GetRawText());
+        Environment.ExitCode = CliOutput.Render(parsed["--operation"], response, parsed, Console.Out, Console.Error, started.Elapsed);
+        return;
+    }
+    if (args[0] == "--bench")
+    {
+        // --bench <client-key> <host-pub> <host> <port> <iterations> <script-file>: in-process request timings (ms).
+        var benchClient = new tcs(args[3], int.Parse(args[4]), args[1], args[2]);
+        var iterations = int.Parse(args[5]);
+        var benchScript = await File.ReadAllTextAsync(args[6]);
+        var watch = new System.Diagnostics.Stopwatch();
+        var health = new List<double>();
+        var exec = new List<double>();
+        for (var i = 0; i < iterations; i++)
+        {
+            watch.Restart();
+            await benchClient.HealthAsync();
+            health.Add(watch.Elapsed.TotalMilliseconds);
+        }
+        for (var i = 0; i < iterations; i++)
+        {
+            watch.Restart();
+            await benchClient.ExecAsync(benchScript);
+            exec.Add(watch.Elapsed.TotalMilliseconds);
+        }
+        Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new { health, exec }));
         return;
     }
     if (args[0] == "--audit-production")
@@ -101,7 +127,7 @@ try
 }
 catch (Exception error)
 {
-    Console.Error.WriteLine(Deployment.FailureHint(error));
+    if (Deployment.FailureHint(error) is { } hint) Console.Error.WriteLine(hint);
     Console.Error.WriteLine($"tcs: operation failed: {error}");
     Environment.ExitCode = 1;
 }

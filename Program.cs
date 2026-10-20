@@ -3,15 +3,17 @@ using System.Text;
 using System.Text.Json;
 using Tcs;
 
+var asDaemon = args.FirstOrDefault() == "--tcsd" || string.Equals(Path.GetFileNameWithoutExtension(Environment.ProcessPath), "tcsd", StringComparison.OrdinalIgnoreCase);
 try
 {
     await RunAsync(args);
 }
 catch (Exception exception)
 {
-    Console.Error.WriteLine(Deployment.FailureHint(exception));
-    Console.Error.WriteLine($"tcs: operation failed: {exception}");
-    Environment.ExitCode = 1;
+    // Daemon operators get the full detail; the controller prints one message line (stack trace only with --verbose).
+    Console.Error.WriteLine(CliOutput.FormatFailure(exception, asDaemon || args.Contains("--verbose")));
+    if (exception is ArgumentException) Console.Error.WriteLine(asDaemon ? CliOutput.DaemonUsage : CliOutput.ClientUsage);
+    Environment.ExitCode = asDaemon ? 1 : CliOutput.Failure;
 }
 
 static void PrintHelp(bool daemon)
@@ -52,6 +54,13 @@ TCS 主控端：tcs <host> [health|exec|upload] [options]
   --script <python>          exec 操作使用的 Python 源码
   --script-base64 <base64>   exec 操作使用的 UTF-8 Python 源码（Base64）
   --file <path>              exec 的本地 UTF-8 Python 文件，或 upload 要上传的文件
+  --max-output <N>           exec 每路输出最多保留的字符数（默认：16000，保留头尾；0 表示不限制）
+  --json                     输出完整 JSON（默认只输出远端 stdout/stderr）
+  --meta                     exec 末尾总是附一行耗时与长度信息
+  --verbose                  显示信任校验过程和错误堆栈
+
+输出与退出码（exec）：stdout/stderr 为远端原样输出，退出码等于远端退出码（超时 124，超出 253 记 254）。
+仅在异常时 stderr 末尾追加一行 "tcs: ..."。tcs 自身错误（连接、身份、参数）退出码 255。
 
 示例：
   tcs alipc health
@@ -114,6 +123,7 @@ if (pairingArgs.FirstOrDefault() == "pairing")
     return;
 }
 
+if (!daemonMode && args.Length == 0) throw new ArgumentException("缺少被控端地址。");
 var clientOptions = daemonMode ? null : CliArguments.Parse(args);
 for (var i = args.FirstOrDefault() is "--tcsd" or "--tcs-client" ? 1 : 0; daemonMode && i < args.Length; i++)
 {
@@ -162,31 +172,19 @@ if (!daemonMode)
     if (clientPort is < 1 or > 65535) throw new ArgumentException("--port 必须在 1 到 65535 之间。");
     var script = operation == "exec" ? await CliArguments.ReadScriptAsync(clientOptions!) : null;
     var uploadBytes = operation == "upload" ? await File.ReadAllBytesAsync(Option("--file", "")) : null;
-    var identity = Deployment.ClientKey;
-    Deployment.ValidatePair(identity);
-    await HostTrust.ResolveAsync(host, clientPort, clientOptions!.GetValueOrDefault("--trust-fingerprint"));
+    int? maxOutput = clientOptions!.TryGetValue("--max-output", out var cap) ? int.Parse(cap) : null;
+    Deployment.RequireKey(Deployment.ClientKey);
+    HostTrust.Verbose = clientOptions.ContainsKey("--verbose");
+    await HostTrust.ResolveAsync(host, clientPort, clientOptions.GetValueOrDefault("--trust-fingerprint"));
     var client = new tcs(host, clientPort);
-    if (operation == "health")
+    var started = System.Diagnostics.Stopwatch.StartNew();
+    var result = operation switch
     {
-        Console.WriteLine((await client.HealthAsync()).GetRawText());
-    }
-    else if (operation == "exec")
-    {
-        Console.WriteLine((await client.ExecAsync(script!)).GetRawText());
-    }
-    else if (operation == "upload")
-    {
-        var path = Option("--file", "");
-        if (path.Length == 0)
-        {
-            throw new ArgumentException("--file is required");
-        }
-        Console.WriteLine((await client.UploadAsync(Path.GetFileName(path), uploadBytes!)).GetRawText());
-    }
-    else
-    {
-        throw new ArgumentException($"unknown client operation: {operation}");
-    }
+        "health" => await client.HealthAsync(),
+        "exec" => await client.ExecAsync(script!, maxOutput: maxOutput),
+        _ => await client.UploadAsync(Path.GetFileName(Option("--file", "")), uploadBytes!),
+    };
+    Environment.ExitCode = CliOutput.Render(operation, result, clientOptions, Console.Out, Console.Error, started.Elapsed);
     return;
 }
 

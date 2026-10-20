@@ -2,13 +2,18 @@ using System.Text.Json.Serialization;
 
 public sealed record ClientExecRequest(
     [property: JsonPropertyName("script")] string Script,
-    [property: JsonPropertyName("timeoutSeconds")] int TimeoutSeconds);
+    [property: JsonPropertyName("timeoutSeconds")] int TimeoutSeconds,
+    [property: JsonPropertyName("maxOutput")] int? MaxOutput = null);
 
 public sealed record ExecRequest(
     [property: JsonPropertyName("script")] string Script,
-    [property: JsonPropertyName("timeoutSeconds")] int? TimeoutSeconds);
+    [property: JsonPropertyName("timeoutSeconds")] int? TimeoutSeconds,
+    [property: JsonPropertyName("maxOutput")] int? MaxOutput = null);
 
-public sealed record ExecResult(int? ExitCode, string Stdout, string Stderr, bool TimedOut);
+// StdoutOmitted/StderrOmitted: characters dropped by the per-stream output cap (0 = nothing dropped).
+// DurationMs: server-side wall time of the Python process (start to exit or kill).
+public sealed record ExecResult(int? ExitCode, string Stdout, string Stderr, bool TimedOut,
+    long StdoutOmitted = 0, long StderrOmitted = 0, long DurationMs = 0);
 
 public sealed record UploadResponse([property: JsonPropertyName("saved")] string[] Saved);
 

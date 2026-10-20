@@ -69,7 +69,7 @@ if ((Test-Path -LiteralPath $tcsKey) -or (Test-Path -LiteralPath ($tcsKey + '.pu
 
 ## 3. 安装（无需管理员权限）
 
-从 [GitHub Releases](https://github.com/KateY07/tcs2/releases) 获取发布包；当前版本安装包为 tcs-manual-2026.09.26.7.exe。两端分别双击安装程序，选择 C（主控端）或 S（被控端）。选择决定检查哪个私钥，同一安装包包含两个程序。
+从 [GitHub Releases](https://github.com/KateY07/tcs2/releases) 获取发布包；当前版本安装包为 tcs-manual-2026.10.20.1.exe。两端分别双击安装程序，选择 C（主控端）或 S（被控端）。选择决定检查哪个私钥，同一安装包包含两个程序。
 
 安装程序只检查固定位置的私钥是否可读取、格式及签名是否可用，公钥和指纹直接从私钥推导。私钥缺失、损坏或带口令时停止，显示错误和供全新用户复制的生成脚本；已有身份应恢复原私钥。不会继续复制程序或修改用户 Path，也不会自动执行生成命令。不要求同名 .pub 存在。
 
@@ -161,7 +161,17 @@ tcs server upload "$env:USERPROFILE\Documents\demo.txt"
 tcs server exec "import subprocess; r = subprocess.run(['ping.exe', '-n', '4', '127.0.0.1']); raise SystemExit(r.returncode)"
 ~~~
 
-exec 的内容是 Python 源码，不是 shell 命令。响应含 ExitCode、Stdout、Stderr、TimedOut，需检查字段判断结果；默认执行超时 30 秒。
+exec 的内容是 Python 源码，不是 shell 命令；默认执行超时 30 秒，更长的任务由用户自行跟进。
+
+exec 输出契约（省 token，便于脚本和大模型调用）：
+
+- 成功时只输出远端 stdout，stderr 为空，退出码 0。校验已保存身份的过程默认不再显示（`--verbose` 可查看）。
+- 远端 stderr 原样写到标准错误，进程退出码等于远端脚本退出码；超时为 124；超出 253 的记 254。
+- 仅在异常时，标准错误末尾追加一行 `tcs: ...`，例如 `tcs: exit=3`、`tcs: timeout`、`tcs: stdout-omitted=183204`。
+- 输出上限：被控端每路 stdout/stderr 默认最多保留 16000 字符（保留头部 1/4 与尾部 3/4，中间以 `[tcs: 截断 ...]` 标记）。`--max-output N` 调整，`0` 表示不限制。
+- `--meta` 总是追加一行 `tcs: exit=0 task=…ms total=…ms out=… err=…`；`--json` 输出完整 JSON（ExitCode、Stdout、Stderr、TimedOut 及 StdoutOmitted、StderrOmitted、DurationMs），退出码 0，供需要结构化结果的调用使用。
+- health 与 upload 仍输出 JSON。tcs 自身错误（连接、身份、参数）退出码统一为 255，不与远端脚本的退出码混淆。
+- 参数不合法或不带参数运行 tcs 时，输出一行原因和简短用法，不打印堆栈；`--verbose` 才输出详细异常。
 
 也可以执行主控端已有的 Python 文件（UTF-8，可带 BOM）：
 
@@ -177,7 +187,7 @@ tcs server exec --file "test.py"
 
 ## 8. 故障和升级
 
-- CLI 失败返回退出码 1，在标准错误输出给出提示并保留异常详情；正常 JSON 在标准输出。
+- tcs 自身失败退出码为 255（被控端 tcsd 为 1），在标准错误输出一行提示；`--verbose` 附带异常详情。exec 的退出码见第 7 节。从旧版升级：依赖 exec 返回 JSON 的调用须加 `--json`。
 - TCP 被拒绝：检查被控端是否运行、双方端口是否一致。Ping/RDP/共享可用不代表此端口可达。
 - 对端提前关闭：核对被控端日志及主控授权，不能直接断定是防火墙；程序不自动重试远程指令。
 - 密钥变化或签名失败：停止连接，通过可信渠道确认身份，不自动接受新公钥。

@@ -58,7 +58,14 @@ if ((Test-Path -LiteralPath $tcsKey) -or (Test-Path -LiteralPath ($tcsKey + '.pu
         Console.WriteLine($"安装前检查通过：{path}\n公钥指纹（从私钥推导）：{Pairing.Fingerprint(blob)}");
     }
 
-    internal static string FailureHint(Exception error) => error switch
+    // Cheap per-call check; the full sign/verify self-test stays in ValidatePair (install check, daemon start, pairing).
+    internal static void RequireKey(string path)
+    {
+        if (!File.Exists(path))
+            throw new FileNotFoundException($"缺少私钥：{path}。请恢复已有身份或由用户提前生成；不要求 .pub 文件，不会自动生成密钥。");
+    }
+
+    internal static string? FailureHint(Exception error) => error switch
     {
         SocketException socket when socket.SocketErrorCode is SocketError.HostNotFound or SocketError.NoData => "地址解析失败：请核对被控端名称，或使用其可达 IP 地址。",
         SocketException socket when socket.SocketErrorCode == SocketError.ConnectionRefused => "TCP 连接被拒绝：请检查被控端 tcsd 是否运行、端口是否一致；本次未完成认证。",
@@ -67,7 +74,7 @@ if ((Test-Path -LiteralPath $tcsKey) -or (Test-Path -LiteralPath ($tcsKey + '.pu
         OperationCanceledException or TimeoutException => "连接或握手超时/取消：请检查被控端状态和网络。不要自动重试可能已经执行的远程指令。",
         FileNotFoundException => "缺少所需文件：密钥须提前放在固定路径；被控端缺少 authorized_keys 时先导入配对文件。",
         System.Security.Cryptography.CryptographicException => "身份或签名校验失败：连接已拒绝。请通过可信渠道核对双方身份，不要盲目删除信任记录。",
-        ArgumentException => "参数错误：请运行 --help；密钥路径和数据目录固定，不接受路径覆盖参数。",
-        _ => "操作未完成，请检查以下详细错误。"
+        ArgumentException => null,
+        _ => null
     };
 }

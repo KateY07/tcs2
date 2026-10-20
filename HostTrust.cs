@@ -6,6 +6,8 @@ namespace Tcs;
 
 internal static class HostTrust
 {
+    internal static bool Verbose;
+
 #if !TCS_TESTING
     internal static string PinnedPath(string host, int port)
     {
@@ -40,7 +42,7 @@ internal static class HostTrust
             var savedFingerprint = Pairing.Fingerprint(TcsCrypto.ReadPublicKeyBlob(existing));
             if (existing != path)
                 Console.Error.WriteLine($"旧固定公钥正在生效：{existing}\n固定指纹：{savedFingerprint}\n目标 [{host}]:{port} 没有独立记录，使用旧固定公钥严格校验，因此不会询问首次确认。若目标不匹配将拒绝连接，请勿盲目删除或覆盖此文件。");
-            else Console.Error.WriteLine($"正在校验已保存的被控端身份：[{host}]:{port}\n信任记录：{existing}");
+            else if (Verbose) Console.Error.WriteLine($"正在校验已保存的被控端身份：[{host}]:{port}\n信任记录：{existing}");
             if (expected is not null && Pairing.Fingerprint(TcsCrypto.ReadPublicKeyBlob(existing)) != expected)
                 throw new CryptographicException("提供的指纹与已固定公钥不一致；不会覆盖原身份。");
             return existing;

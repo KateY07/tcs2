@@ -156,9 +156,11 @@ static class TcsWire
         session.Encrypt(sequence, header, plaintext.Span, ciphertext);
         var frameLength = new byte[4];
         BinaryPrimitives.WriteUInt32BigEndian(frameLength, (uint)(header.Length + ciphertext.Length));
-        await stream.WriteAsync(frameLength, cancellationToken);
-        await stream.WriteAsync(header, cancellationToken);
-        await stream.WriteAsync(ciphertext, cancellationToken);
+        var frame = new byte[frameLength.Length + header.Length + ciphertext.Length];
+        frameLength.CopyTo(frame, 0);
+        header.CopyTo(frame, frameLength.Length);
+        ciphertext.CopyTo(frame, frameLength.Length + header.Length);
+        await stream.WriteAsync(frame, cancellationToken);
         await stream.FlushAsync(cancellationToken);
     }
 
