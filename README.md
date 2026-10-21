@@ -1,4 +1,6 @@
-# TCS 安装与使用
+﻿# TCS 安装与使用
+
+项目主页：<https://katey07.github.io/tcs2/>（`docs/` 目录由 GitHub Pages 直接发布，不使用 Actions）。
 
 主控端运行 tcs，被控端运行 tcsd。使用加密 TCP，支持 IPv4/IPv6，默认端口 10122，无需 sshd 或 .NET 运行时。以下命令使用 Windows PowerShell，server 替换为被控端计算机名或可达 IP。
 
@@ -69,7 +71,7 @@ if ((Test-Path -LiteralPath $tcsKey) -or (Test-Path -LiteralPath ($tcsKey + '.pu
 
 ## 3. 安装（无需管理员权限）
 
-从 [GitHub Releases](https://github.com/KateY07/tcs2/releases) 获取发布包；当前版本安装包为 tcs-manual-2026.10.20.2.exe。两端分别双击安装程序，会出现安装窗口，回答“这台是否为主控端”（是 = 主控端，否 = 被控端）。回答决定检查哪个私钥，同一安装包包含两个程序。无人值守时可预设环境变量 `TCS_ROLE=controller` 或 `server` 跳过提问。
+从 [GitHub Releases](https://github.com/KateY07/tcs2/releases) 获取发布包；当前版本安装包为 tcs-manual-2026.10.21.1.exe。两端分别双击安装程序，会出现安装窗口，回答“这台是否为主控端”（是 = 主控端，否 = 被控端）。回答决定检查哪个私钥，同一安装包包含两个程序。无人值守时可预设环境变量 `TCS_ROLE=controller` 或 `server` 跳过提问。
 
 安装程序只检查固定位置的私钥是否可读取、格式及签名是否可用，公钥和指纹直接从私钥推导。私钥缺失、损坏或带口令时停止（窗口显示失败并展开详情），详情中有错误和供全新用户复制的生成脚本；已有身份应恢复原私钥。不会继续复制程序或修改用户 Path，也不会自动执行生成命令。不要求同名 .pub 存在。
 

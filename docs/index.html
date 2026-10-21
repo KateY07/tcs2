@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TCS · Encrypted remote control for Windows</title>
+<meta name="description" content="TCS is a tiny encrypted remote-control pair for Windows: tcs on your machine, tcsd on the other. No sshd, no .NET runtime, just Ed25519 keys. Run Python, upload files, check health in one command.">
+<meta name="theme-color" content="#eef6f8" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#071017" media="(prefers-color-scheme: dark)">
+<meta property="og:title" content="TCS">
+<meta property="og:description" content="Run things on another Windows PC. Securely. In one command.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<style>
+:root{
+  --bg:#eef6f8; --ink:#0f1a20; --muted:#52646e; --line:rgba(15,26,32,.09);
+  --glass:rgba(255,255,255,.64); --glass-edge:rgba(255,255,255,.8); --shadow:0 18px 50px rgba(20,70,90,.14);
+  --sky:#0ea5e9; --teal:#14b8a6; --green:#22c55e; --violet:#7c6cf0; --amber:#f59e0b; --red:#ef4444;
+  --blob-a:#7dd3fc; --blob-b:#5eead4; --blob-c:#c4b5fd; --code:#0d1620; --code-ink:#dbe7ee;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#071017; --ink:#eaf3f7; --muted:#8fa4af; --line:rgba(255,255,255,.09);
+  --glass:rgba(255,255,255,.06); --glass-edge:rgba(255,255,255,.13); --shadow:0 18px 50px rgba(0,0,0,.5);
+  --blob-a:#0369a1; --blob-b:#0f766e; --blob-c:#4c1d95;
+}}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.65 "Segoe UI Variable Text","Segoe UI",-apple-system,system-ui,sans-serif;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+body::before,body::after,.blob3{content:"";position:fixed;z-index:-1;border-radius:50%;filter:blur(90px);pointer-events:none}
+body::before{width:60vmax;height:60vmax;left:-18vmax;top:-22vmax;opacity:.55;background:radial-gradient(circle,var(--blob-a),transparent 68%)}
+body::after{width:56vmax;height:56vmax;right:-20vmax;top:20vmax;opacity:.5;background:radial-gradient(circle,var(--blob-b),transparent 66%)}
+.blob3{width:44vmax;height:44vmax;left:24vmax;bottom:-26vmax;opacity:.4;background:radial-gradient(circle,var(--blob-c),transparent 66%)}
+a{color:inherit}
+.wrap{max-width:1120px;margin:0 auto;padding:0 24px}
+.glass{background:var(--glass);border:1px solid var(--glass-edge);backdrop-filter:blur(22px) saturate(160%);-webkit-backdrop-filter:blur(22px) saturate(160%);box-shadow:var(--shadow)}
+nav{position:sticky;top:12px;z-index:20;margin:12px auto 0;max-width:1120px;padding:0 24px}
+nav .bar{display:flex;align-items:center;gap:6px;padding:10px 12px 10px 16px;border-radius:999px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;text-decoration:none;margin-right:auto;letter-spacing:.3px}
+.brand img{width:26px;height:26px}
+nav a.link{padding:6px 12px;border-radius:999px;text-decoration:none;color:var(--muted);font-size:14.5px}
+nav a.link:hover{color:var(--ink);background:var(--line)}
+.btn{display:inline-flex;align-items:center;gap:8px;cursor:pointer;font:inherit;font-weight:600;text-decoration:none;border-radius:999px;padding:11px 22px;color:var(--ink);background:var(--glass);border:1px solid var(--glass-edge);backdrop-filter:blur(14px);transition:transform .15s,box-shadow .15s}
+.btn:hover{transform:translateY(-1px)}
+.btn.primary{color:#fff;border:0;background:linear-gradient(135deg,var(--sky),var(--teal));box-shadow:0 10px 28px rgba(14,165,200,.38)}
+.btn.primary:hover{box-shadow:0 14px 34px rgba(14,165,200,.5)}
+.btn.small{padding:7px 16px;font-size:14px}
+.hero{display:grid;grid-template-columns:minmax(0,1.02fr) minmax(0,.98fr);gap:46px;align-items:center;padding:80px 0 66px}
+.eyebrow{display:inline-flex;align-items:center;gap:8px;padding:6px 14px;border-radius:999px;font-size:13.5px;color:var(--muted)}
+.eyebrow i{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 0 4px rgba(34,197,94,.2)}
+h1{font-size:clamp(40px,6.6vw,74px);line-height:1.05;letter-spacing:-.035em;margin:20px 0 18px;font-weight:700}
+h1 span{background:linear-gradient(100deg,var(--sky),var(--teal) 55%,var(--green));-webkit-background-clip:text;background-clip:text;color:transparent}
+.lead{font-size:clamp(17px,2.1vw,20px);color:var(--muted);max-width:33em;margin:0 0 30px}
+.cta{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+.meta{margin-top:18px;font-size:13.5px;color:var(--muted)}
+section{padding:46px 0}
+h2{font-size:clamp(28px,4vw,40px);letter-spacing:-.025em;line-height:1.15;margin:0 0 10px}
+.sub{color:var(--muted);margin:0 0 30px;max-width:42em}
+.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+.card{border-radius:22px;padding:24px 24px 22px}
+.card .ico{width:42px;height:42px;border-radius:13px;display:grid;place-items:center;color:#fff;margin-bottom:14px;background:linear-gradient(135deg,var(--sky),var(--teal))}
+.card:nth-child(2) .ico{background:linear-gradient(135deg,var(--teal),var(--green))}
+.card:nth-child(3) .ico{background:linear-gradient(135deg,var(--violet),var(--sky))}
+.card:nth-child(4) .ico{background:linear-gradient(135deg,#f59e0b,#f97316)}
+.card:nth-child(5) .ico{background:linear-gradient(135deg,#ec4899,var(--violet))}
+.card:nth-child(6) .ico{background:linear-gradient(135deg,var(--green),#84cc16)}
+.card h3{margin:0 0 6px;font-size:18px}
+.card p{margin:0;color:var(--muted);font-size:15px}
+.steps{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;counter-reset:s}
+.step{border-radius:20px;padding:20px 20px 18px;position:relative}
+.step::before{counter-increment:s;content:counter(s);display:grid;place-items:center;width:30px;height:30px;border-radius:50%;margin-bottom:12px;font-weight:700;font-size:14px;color:#fff;background:linear-gradient(135deg,var(--sky),var(--teal))}
+.step b{display:block;font-size:16px;margin-bottom:4px}
+.step span{color:var(--muted);font-size:14.5px}
+.step code{font:12.5px Consolas,monospace;display:block;margin-top:10px;padding:8px 10px;border-radius:10px;background:var(--code);color:var(--code-ink);white-space:pre-wrap;word-break:break-all}
+.two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:20px;align-items:start}
+pre{margin:0;padding:20px 22px;border-radius:20px;background:var(--code);color:var(--code-ink);overflow:auto;font:13.5px/1.7 "Cascadia Code",Consolas,"SFMono-Regular",monospace;position:relative}
+pre .c{color:#6f8794}pre .k{color:#7dd3fc}pre .s{color:#fcd34d}pre .p{color:#5eead4}pre .e{color:#fca5a5}
+.copy{position:absolute;top:10px;right:10px;font-size:12px;padding:4px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.08);color:#cfd9df;cursor:pointer}
+.tbl{border-radius:20px;overflow:hidden}
+.tbl div{display:grid;grid-template-columns:150px 1fr;gap:12px;padding:12px 18px;border-top:1px solid var(--line);font-size:14.5px}
+.tbl div:first-child{border-top:0}
+.tbl code{font:13px Consolas,monospace;color:var(--teal)}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+.stat{border-radius:20px;padding:20px 22px}
+.stat b{display:block;font-size:30px;letter-spacing:-.02em;font-weight:650;background:linear-gradient(100deg,var(--sky),var(--teal));-webkit-background-clip:text;background-clip:text;color:transparent}
+.stat span{color:var(--muted);font-size:14px}
+.notes{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}
+.note{border-radius:20px;padding:20px 22px;font-size:14.5px;color:var(--muted)}
+.note b{display:block;color:var(--ink);margin-bottom:4px;font-size:15.5px}
+footer{padding:44px 0 56px;color:var(--muted);font-size:14px;display:flex;flex-wrap:wrap;gap:12px 26px;justify-content:space-between;border-top:1px solid var(--line);margin-top:30px}
+footer a{text-decoration:none}footer a:hover{color:var(--ink)}
+
+/* terminal */
+.stage{position:relative;border-radius:34px;padding:34px 22px;min-height:440px;display:grid;place-items:center;overflow:hidden;background:linear-gradient(140deg,#a5e6f6,#b6f0de 50%,#cfd0ff)}
+.stage::before,.stage::after{content:"";position:absolute;border-radius:50%;filter:blur(30px)}
+.stage::before{width:230px;height:230px;left:-60px;bottom:-70px;background:#7dd3fc;opacity:.7}
+.stage::after{width:210px;height:210px;right:-50px;top:-50px;background:#86efac;opacity:.6}
+@media (prefers-color-scheme:dark){.stage{background:linear-gradient(140deg,#0b3b57,#0b4f4a 55%,#312e81)}}
+.term{position:relative;z-index:1;width:100%;max-width:430px;border-radius:18px;overflow:hidden;background:rgba(10,18,26,.78);border:1px solid rgba(255,255,255,.16);backdrop-filter:blur(24px) saturate(150%);-webkit-backdrop-filter:blur(24px) saturate(150%);box-shadow:0 30px 70px rgba(5,40,60,.4);color:#e1edf3}
+.term .top{display:flex;gap:7px;align-items:center;padding:12px 14px;background:rgba(255,255,255,.05);font-size:12.5px;color:#93a9b5}
+.term .top i{width:11px;height:11px;border-radius:50%;background:#ff5f57}.term .top i:nth-child(2){background:#febc2e}.term .top i:nth-child(3){background:#28c840}
+.term .top span{margin-left:8px}
+.term .body{padding:16px 18px 20px;height:320px;overflow:hidden;font:13px/1.7 "Cascadia Code",Consolas,monospace;white-space:pre-wrap;word-break:break-all}
+.term .p{color:#5eead4}.term .ok{color:#86efac}.term .bad{color:#fca5a5}.term .dim{color:#7f95a1}
+.caret{display:inline-block;width:8px;height:15px;margin-left:2px;vertical-align:-2px;background:#7dd3fc;animation:blink 1s steps(2) infinite}
+@keyframes blink{50%{opacity:0}}
+@media (max-width:900px){
+  .hero{grid-template-columns:minmax(0,1fr);padding:56px 0 40px;gap:36px}
+  .grid,.steps,.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.two{grid-template-columns:minmax(0,1fr)}
+  nav a.link{display:none}
+}
+@media (max-width:600px){
+  .wrap,nav{padding:0 16px}.grid,.steps,.stats{grid-template-columns:minmax(0,1fr)}.stage{min-height:400px;padding:24px 12px}.tbl div{grid-template-columns:1fr;gap:2px}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}html{scroll-behavior:auto}}
+</style>
+</head>
+<body>
+<div class="blob3"></div>
+<nav><div class="bar glass">
+  <a class="brand" href="#top"><img src="favicon.svg" alt="">TCS</a>
+  <a class="link" href="#features">Features</a>
+  <a class="link" href="#how">How it works</a>
+  <a class="link" href="#cli">CLI</a>
+  <a class="link" href="#security">Security</a>
+  <a class="link" href="https://github.com/KateY07/tcs2">GitHub</a>
+  <a class="btn primary small" href="https://github.com/KateY07/tcs2/releases" id="navdl">Download</a>
+</div></nav>
+
+<main class="wrap" id="top">
+  <div class="hero">
+    <div>
+      <span class="eyebrow glass"><i></i><span id="ver">v2026.10.20.2</span> · Windows · x64</span>
+      <h1><span>Run things</span><br>on another PC.</h1>
+      <p class="lead">TCS is a tiny encrypted remote-control pair for Windows: <b>tcs</b> on your machine, <b>tcsd</b> on the other. No sshd, no .NET runtime, no accounts. Just Ed25519 keys, a fingerprint you confirm once, and one command.</p>
+      <div class="cta">
+        <a class="btn primary" id="download" href="https://github.com/KateY07/tcs2/releases/latest"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="M7 11l5 5 5-5"/><path d="M5 20h14"/></svg>Download installer</a>
+        <a class="btn" href="https://github.com/KateY07/tcs2">View on GitHub</a>
+      </div>
+      <p class="meta" id="meta">Windows 10 / 11 · x64 · per-user install, no admin rights · TCP 10122, IPv4 and IPv6</p>
+    </div>
+    <div class="stage" role="img" aria-label="Terminal session running tcs commands">
+      <div class="term"><div class="top"><i></i><i></i><i></i><span>PowerShell · tcs</span></div><div class="body" id="body"></div></div>
+    </div>
+  </div>
+
+  <section id="features">
+    <h2>Small, direct, scriptable</h2>
+    <p class="sub">Everything you need to drive a second Windows machine from a script, a terminal or an agent, and nothing you have to babysit.</p>
+    <div class="grid">
+      <div class="card glass"><div class="ico"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="8" height="8" rx="2"/><rect x="13" y="12" width="8" height="8" rx="2"/><path d="M11 8h2a2 2 0 0 1 2 2v2"/></svg></div><h3>One pair of binaries</h3><p>tcs controls, tcsd listens. NativeAOT builds: no runtime to install, no service to register, about 9 MB each.</p></div>
+      <div class="card glass"><div class="ico"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M16 7l3 3M14 9l2 2"/></svg></div><h3>Mutual key authentication</h3><p>OpenSSH-format Ed25519 keys on both sides. The controlled host proves itself first; you pin its fingerprint once.</p></div>
+      <div class="card glass"><div class="ico"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg></div><h3>Encrypted transport</h3><p>Ephemeral X25519 key agreement, HKDF-derived session keys and ChaCha20-Poly1305 for every frame.</p></div>
+      <div class="card glass"><div class="ico"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m8 8-4 4 4 4M16 8l4 4-4 4M14 5l-4 14"/></svg></div><h3>Run Python remotely</h3><p>exec sends source (or a file) to the controlled PC and returns its output and exit code. Health checks and file uploads too.</p></div>
+      <div class="card glass"><div class="ico"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h16M4 6h16M4 18h10"/></svg></div><h3>Output made for scripts</h3><p>Success prints only the remote stdout. The exit code is the remote exit code. Long output is capped, never flooding your context.</p></div>
+      <div class="card glass"><div class="ico"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z"/><path d="m9 12 2 2 4-4"/></svg></div><h3>Fixed paths, no overrides</h3><p>Keys, trust records and data live in fixed per-user locations. There are no path flags to misconfigure or to abuse.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="stats">
+      <div class="stat glass"><b>38 ms</b><span>whole health check on a LAN host, process start included (median of 12, one machine)</span></div>
+      <div class="stat glass"><b>17 ms</b><span>of that is the tcs process starting: it is a native AOT binary</span></div>
+      <div class="stat glass"><b>0</b><span>runtimes, services or accounts to set up on either PC</span></div>
+      <div class="stat glass"><b>16 K</b><span>characters of output kept per stream by default (head and tail)</span></div>
+    </div>
+  </section>
+
+  <section id="how">
+    <h2>Four steps from zero to connected</h2>
+    <p class="sub">Keys stay on the machine that made them. Only a small public pairing file travels.</p>
+    <div class="steps">
+      <div class="step glass"><b>Make keys</b><span>One key pair per role, no passphrase.</span><code>ssh-keygen -t ed25519 -f ~\.ssh\id_ed25519</code></div>
+      <div class="step glass"><b>Install</b><span>Run the installer on both PCs. It shows progress and checks your key first.</span><code>tcs-manual-*.exe</code></div>
+      <div class="step glass"><b>Pair</b><span>Export on the controller, import on the controlled PC after checking the fingerprint.</span><code>tcs pairing export --output c.tcs-pair
+tcsd pairing import c.tcs-pair</code></div>
+      <div class="step glass"><b>Connect</b><span>Start tcsd, then confirm the host fingerprint on first contact.</span><code>tcsd
+tcs office-pc health</code></div>
+    </div>
+  </section>
+
+  <section id="cli">
+    <h2>A CLI that stays out of the way</h2>
+    <p class="sub">Quiet on success, loud only when something is wrong. The exit code tells scripts the rest.</p>
+    <div class="two">
+      <pre><button class="copy" data-copy="tcs office-pc exec &quot;print(1)&quot;">copy</button><span class="c"># health check</span>
+<span class="k">tcs</span> office-pc health
+<span class="c"># run Python source, or a local file</span>
+<span class="k">tcs</span> office-pc exec <span class="s">"print(1)"</span>
+<span class="k">tcs</span> office-pc exec <span class="p">--file</span> job.py
+<span class="c"># upload a file (saved beside the daemon's data)</span>
+<span class="k">tcs</span> office-pc upload report.txt
+<span class="c"># more control</span>
+<span class="k">tcs</span> office-pc exec <span class="s">"..."</span> <span class="p">--max-output</span> 0 <span class="p">--meta</span> <span class="p">--json</span></pre>
+      <div class="tbl glass">
+        <div><code>success</code><span>stdout holds only the remote stdout; stderr is empty; exit code 0.</span></div>
+        <div><code>remote failure</code><span>Remote stderr as is, the remote exit code, and one line such as <code>tcs: exit=3</code>.</span></div>
+        <div><code>timeout</code><span>Exit code 124 and <code>tcs: timeout</code>. Default limit 30 s; longer jobs are yours to follow up.</span></div>
+        <div><code>tcs errors</code><span>Exit code 255 plus one line, so they never collide with a remote script's code.</span></div>
+        <div><code>--max-output N</code><span>Characters kept per stream (default 16000, head and tail, 0 = unlimited).</span></div>
+        <div><code>--json / --meta</code><span>Full JSON result, or an always-on timing line.</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="security">
+    <h2>Good to know</h2>
+    <p class="sub">TCS is deliberately small. These are the edges worth reading before you rely on it.</p>
+    <div class="notes">
+      <div class="note glass"><b>exec is remote code execution</b><span>That is its job. Only add keys you control to authorized_keys, and keep private keys on the machine that made them. They are never packaged or copied.</span></div>
+      <div class="note glass"><b>Python on the controlled PC</b><span>exec needs a Python interpreter there (or pass tcsd --python). Health checks and uploads work without it.</span></div>
+      <div class="note glass"><b>Trust is explicit</b><span>The first connection asks you to confirm the host fingerprint; a changed fingerprint is refused, never auto-accepted. Changes to authorized_keys need a tcsd restart.</span></div>
+      <div class="note glass"><b>Keys without passphrases</b><span>Passphrase-protected keys and ssh-agent are not supported yet. Protect the .ssh folder with normal Windows account permissions.</span></div>
+      <div class="note glass"><b>Open the port yourself</b><span>The installer does not touch the firewall or register a service. Allow TCP 10122 deliberately, and start tcsd when you need it.</span></div>
+    </div>
+  </section>
+
+  <footer>
+    <span>TCS · Encrypted remote control for Windows.</span>
+    <span><a href="https://github.com/KateY07/tcs2">GitHub</a> · <a href="https://github.com/KateY07/tcs2/releases">Releases</a> · <a href="https://github.com/KateY07/tcs2/blob/main/README.md">README</a> · installer built with <a href="https://katey07.github.io/onesetup/">OneSetup</a></span>
+  </footer>
+</main>
+
+<script>
+(function(){
+  var $=function(id){return document.getElementById(id)};
+  fetch('https://api.github.com/repos/KateY07/tcs2/releases?per_page=1').then(function(r){return r.json()}).then(function(rs){
+    var r=rs&&rs[0]; if(!r||!r.assets)return;
+    var a=r.assets.filter(function(x){return /^tcs-manual-.*\.exe$/.test(x.name)})[0];
+    $('ver').textContent=r.tag_name;
+    if(a){$('download').href=a.browser_download_url;$('navdl').href=a.browser_download_url;
+      $('meta').textContent=a.name+' · '+(a.size/1048576).toFixed(1)+' MB · per-user install, no admin rights · Windows 10 / 11 · x64';}
+  }).catch(function(){});
+
+  [].forEach.call(document.querySelectorAll('.copy'),function(b){b.onclick=function(){
+    var t=b.getAttribute('data-copy');
+    (navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject()).then(function(){b.textContent='✓'}).catch(function(){b.textContent='–'});
+    setTimeout(function(){b.textContent='copy'},1400)}});
+
+  // terminal preview
+  var script=[
+    {c:'tcs office-pc health', o:[['ok','{"status":"ok"}']]},
+    {c:'tcs office-pc exec "import platform; print(platform.node())"', o:[['','office-pc']]},
+    {c:'tcs office-pc exec "raise SystemExit(3)"', o:[['bad','tcs: exit=3']]},
+    {c:'echo $LASTEXITCODE', o:[['','3']]},
+    {c:'tcs office-pc upload report.txt', o:[['ok','{"saved":["report-3f9a.txt"]}']]}
+  ];
+  var body=$('body'), token=0, timers=[];
+  function later(ms,fn){timers.push(setTimeout(fn,ms))}
+  function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;')}
+  function line(html){var d=document.createElement('div');d.innerHTML=html;body.appendChild(d);return d}
+  function renderStatic(){body.innerHTML='';script.forEach(function(s){line('<span class="p">PS&gt;</span> '+esc(s.c));s.o.forEach(function(o){line('<span class="'+o[0]+'">'+esc(o[1])+'</span>')})})}
+  function play(){
+    timers.forEach(clearTimeout);timers=[];body.innerHTML='';var my=++token,t=300;
+    script.forEach(function(s){
+      later(t,function(){if(my!==token)return;var d=line('<span class="p">PS&gt;</span> <span class="typed"></span><span class="caret"></span>');d.typed=d.querySelector('.typed')});
+      var chars=s.c.split('');
+      chars.forEach(function(ch,i){later(t+40+i*28,function(){if(my!==token)return;var last=body.lastChild;last.querySelector('.typed').textContent+=ch})});
+      t+=40+chars.length*28+260;
+      later(t,function(){if(my!==token)return;var last=body.lastChild;var c=last.querySelector('.caret');if(c)c.remove()});
+      s.o.forEach(function(o){later(t,function(){if(my!==token)return;line('<span class="'+o[0]+'">'+esc(o[1])+'</span>')});t+=180});
+      t+=520;
+    });
+    later(t+200,function(){if(my!==token)return;line('<span class="p">PS&gt;</span> <span class="caret"></span>')});
+    later(t+4200,function(){if(my===token)play()});
+  }
+  if(window.matchMedia&&matchMedia('(prefers-reduced-motion: reduce)').matches)renderStatic();else play();
+})();
+</script>
+</body>
+</html>
