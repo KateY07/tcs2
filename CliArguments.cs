@@ -23,34 +23,34 @@ internal static class CliArguments
         {
             var name = args[i];
             if (name is not ("--host" or "--port" or "--trust-fingerprint" or "--operation" or "--script" or "--script-base64" or "--file" or "--max-output"))
-                throw new ArgumentException($"未知参数或多余的位置参数：{name}。请运行 tcs --help。");
+                throw new ArgumentException($"Unknown option or extra positional argument: {name}. Run tcs --help.");
             if (i + 1 >= args.Length || args[i + 1].StartsWith("--") || !options.TryAdd(name, args[i + 1]))
-                throw new ArgumentException($"参数重复或缺少值：{name}");
+                throw new ArgumentException($"Duplicate option or missing value: {name}");
         }
         var op = options.GetValueOrDefault("--operation", "health");
         if (op is not ("health" or "exec" or "upload"))
-            throw new ArgumentException($"未知操作：{op}。可用操作：health、exec、upload。");
+            throw new ArgumentException($"Unknown operation: {op}. Available: health, exec, upload.");
         if (string.IsNullOrWhiteSpace(options.GetValueOrDefault("--host", "127.0.0.1")))
-            throw new ArgumentException("被控端地址不能为空。");
+            throw new ArgumentException("The host address cannot be empty.");
         if (!int.TryParse(options.GetValueOrDefault("--port", "10122"), out var port) || port is < 1 or > 65535)
-            throw new ArgumentException("--port 必须是 1 到 65535 之间的整数。");
+            throw new ArgumentException("--port must be an integer from 1 to 65535.");
         if (options.TryGetValue("--max-output", out var maxOutput))
         {
             if (!int.TryParse(maxOutput, out var cap) || cap < 0)
-                throw new ArgumentException("--max-output 必须是不小于 0 的整数（字符数，0 表示不限制）。");
-            if (op != "exec") throw new ArgumentException("--max-output 仅适用于 exec。");
+                throw new ArgumentException("--max-output must be an integer >= 0 (characters; 0 = unlimited).");
+            if (op != "exec") throw new ArgumentException("--max-output only applies to exec.");
         }
-        if (op != "exec" && flags.Contains("--meta")) throw new ArgumentException("--meta 仅适用于 exec。");
+        if (op != "exec" && flags.Contains("--meta")) throw new ArgumentException("--meta only applies to exec.");
         foreach (var flag in flags) options[flag] = "true";
         var sources = new[] { "--script", "--script-base64", "--file" }.Count(options.ContainsKey);
         if (op == "health" && sources != 0)
-            throw new ArgumentException("health 不接受脚本或文件参数。");
+            throw new ArgumentException("health does not accept script or file arguments.");
         if (op == "exec" && (sources > 1 || positional && sources == 0))
-            throw new ArgumentException("exec 须选择一种源码输入：Python 源码、--file <本地 UTF-8 文件> 或 --script-base64 <内容>，不能混用。");
+            throw new ArgumentException("exec needs exactly one source: Python source, --file <local UTF-8 file> or --script-base64 <content>; they cannot be combined.");
         if (op == "upload" && (!options.ContainsKey("--file") || sources != 1))
-            throw new ArgumentException("upload 须指定一个本地文件：tcs <host> upload <file>。");
+            throw new ArgumentException("upload needs one local file: tcs <host> upload <file>.");
         if (options.TryGetValue("--file", out var file) && string.IsNullOrWhiteSpace(file))
-            throw new ArgumentException("文件路径不能为空。");
+            throw new ArgumentException("The file path cannot be empty.");
         return options;
     }
 

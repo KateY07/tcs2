@@ -15,11 +15,23 @@ public sealed class tcsd
     readonly string auditPath;
     readonly AsymmetricKeyParameter hostPrivate;
     readonly byte[] hostBlob;
-    readonly List<byte[]> authorizedBlobs;
+    List<byte[]> authorizedBlobs;
+    DateTime authorizedStamp;
+    readonly object authLock = new();
     readonly object auditLock = new();
+    readonly Tcs.PairingServer pairing;
+    readonly int pairSeconds;
+    const long AuditRotateBytes = 5 * 1024 * 1024;
+    static readonly AsyncLocal<string?> CurrentSource = new();
+
+    // "tcsd pair" opens the window as soon as the listener is up.
+    public bool OpenPairingOnStart { get; set; }
+#if TCS_TESTING
+    public string? FixedPairingCode { get; set; }
+#endif
 
 #if TCS_TESTING
-    public tcsd(string authorizedKeysPath, string hostPrivateKeyPath, string? dataDirectory = null)
+    public tcsd(string authorizedKeysPath, string hostPrivateKeyPath, string? dataDirectory = null, int pairSeconds = Tcs.PairingServer.DefaultSeconds)
 #else
     public tcsd()
 #endif
@@ -28,7 +40,9 @@ public sealed class tcsd
         var authorizedKeysPath = Tcs.Deployment.AuthorizedKeys;
         var hostPrivateKeyPath = Tcs.Deployment.HostKey;
         string? dataDirectory = null;
+        var pairSeconds = Tcs.PairingServer.DefaultSeconds;
 #endif
+        this.pairSeconds = pairSeconds;
         this.authorizedKeysPath = authorizedKeysPath;
         this.hostPrivateKeyPath = hostPrivateKeyPath;
         var root = dataDirectory is null ? Tcs.Deployment.Data : Path.GetFullPath(dataDirectory);
@@ -38,15 +52,94 @@ public sealed class tcsd
         auditPath = Path.Combine(root, "tcs-audit.log");
         hostPrivate = TcsCrypto.ReadPrivateKey(hostPrivateKeyPath);
         hostBlob = TcsCrypto.PublicBlob(hostPrivate);
-        authorizedBlobs = TcsCrypto.ReadAuthorizedKeys(authorizedKeysPath);
+        authorizedBlobs = File.Exists(authorizedKeysPath) ? TcsCrypto.ReadAuthorizedKeys(authorizedKeysPath) : [];   // may be empty: pairing creates it
+        authorizedStamp = File.GetLastWriteTimeUtc(authorizedKeysPath);
+        pairing = new Tcs.PairingServer(hostBlob, AuthorizePairedKey, Audit, line => Console.Error.WriteLine("tcsd: " + line), pairSeconds);
     }
+
+    // Opens the one-time pairing window and tells the operator what to run on the controller.
+    public (string Code, DateTimeOffset Expires) OpenPairingWindow(string? fixedDigits = null)
+    {
+        var (code, expires) = pairing.Open(fixedDigits);
+        Console.Error.WriteLine($"tcsd: pairing code {code} (valid {Math.Max(1, (int)(expires - DateTimeOffset.UtcNow).TotalSeconds)} s, {Tcs.PairingServer.DefaultAttempts} attempts, single use)");
+        Console.Error.WriteLine($"tcsd: on the controller run: tcs pair {Environment.MachineName} {code}");
+        return (code, expires);
+    }
+
+    bool IsAuthorized(byte[] blob)
+    {
+        lock (authLock)
+        {
+            if (authorizedBlobs.Any(known => known.SequenceEqual(blob))) return true;
+            ReloadAuthorizedIfChanged();   // a key imported or paired after start must work without a restart
+            return authorizedBlobs.Any(known => known.SequenceEqual(blob));
+        }
+    }
+
+    void ReloadAuthorizedIfChanged()
+    {
+        try
+        {
+            var stamp = File.GetLastWriteTimeUtc(authorizedKeysPath);
+            if (stamp == authorizedStamp) return;
+            authorizedBlobs = File.Exists(authorizedKeysPath) ? TcsCrypto.ReadAuthorizedKeys(authorizedKeysPath) : [];
+            authorizedStamp = stamp;
+            Audit("authorized-reload", null, "OK", $"keys={authorizedBlobs.Count}");
+        }
+        catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException or FormatException)
+        {
+            Audit("authorized-reload", null, "FAILED", exception.Message);
+        }
+    }
+
+    // Called by the pairing window after the controller proved the code. Returns true if the key was already authorized.
+    bool AuthorizePairedKey(byte[] blob)
+    {
+        lock (authLock)
+        {
+            ReloadAuthorizedIfChanged();
+            if (authorizedBlobs.Any(known => known.SequenceEqual(blob))) return true;
+            Directory.CreateDirectory(Path.GetDirectoryName(authorizedKeysPath)!);
+            using var fileLock = new FileStream(authorizedKeysPath + ".tcs-lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            var existing = File.Exists(authorizedKeysPath) ? File.ReadAllText(authorizedKeysPath) : "";
+            Tcs.Pairing.AtomicWrite(authorizedKeysPath, existing + (existing.Length > 0 && !existing.EndsWith('\n') ? "\n" : "") + Tcs.Pairing.PublicLine(blob) + "\n", true);
+            authorizedBlobs = [.. authorizedBlobs, blob];
+            authorizedStamp = File.GetLastWriteTimeUtc(authorizedKeysPath);
+            return false;
+        }
+    }
+
+    void Audit(string evt, string? fingerprint, string result, string? detail) =>
+        WriteAudit(JsonSerializer.Serialize(new TcsEventAudit(DateTimeOffset.UtcNow, evt, CurrentSource.Value, fingerprint, result, detail), TcsJsonContext.Default.TcsEventAudit));
 
     public async Task RunAsync(IPAddress address, int port, CancellationToken cancellationToken = default)
     {
         var listener = new TcpListener(IPAddress.IPv6Any, port);
         listener.Server.DualMode = true;
         listener.Start();
-        Console.Error.WriteLine($"被控端已启动：IPv4/IPv6 TCP {port}\n主机指纹：{Tcs.Pairing.Fingerprint(hostBlob)}\n已授权主控公钥：{authorizedBlobs.Count}\n数据目录：{Path.GetDirectoryName(auditPath)}\n按 Ctrl+C 停止。");
+        Audit("daemon-start", Tcs.Pairing.Fingerprint(hostBlob), "OK", $"port={port} keys={authorizedBlobs.Count}");
+        Console.Error.WriteLine($"tcsd started: IPv4/IPv6 TCP {port}\nHost fingerprint: {Tcs.Pairing.Fingerprint(hostBlob)}\nAuthorized controller keys: {authorizedBlobs.Count}\nData folder: {Path.GetDirectoryName(auditPath)}\nPress P to open a one-minute pairing window, Ctrl+C to stop.");
+        if (OpenPairingOnStart)
+        {
+#if TCS_TESTING
+            OpenPairingWindow(FixedPairingCode);
+#else
+            OpenPairingWindow();
+#endif
+        }
+        _ = Task.Run(async () =>
+        {
+            // P opens a pairing window in a running tcsd (only with an interactive console).
+            try
+            {
+                while (!cancellationToken.IsCancellationRequested)
+                {
+                    if (!Console.IsInputRedirected && Console.KeyAvailable && Console.ReadKey(true).Key == ConsoleKey.P) OpenPairingWindow();
+                    await Task.Delay(150, cancellationToken);
+                }
+            }
+            catch (Exception exception) when (exception is InvalidOperationException or OperationCanceledException or IOException) { }
+        });
         try
         {
             while (!cancellationToken.IsCancellationRequested)
@@ -66,12 +159,20 @@ public sealed class tcsd
         using (client)
         {
             client.NoDelay = true;
+            var remote = (client.Client.RemoteEndPoint as IPEndPoint)?.Address ?? IPAddress.IPv6None;
+            CurrentSource.Value = (remote.IsIPv4MappedToIPv6 ? remote.MapToIPv4() : remote).ToString();
             await using var stream = client.GetStream();
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(serverCancellation);
             timeout.CancelAfter(TimeSpan.FromSeconds(60));
             try
             {
-                var handshake = await HandshakeAsync(stream, timeout.Token);
+                var prefix = await TcsWire.ReadPrefixAsync(stream, timeout.Token);
+                if (prefix.Type == Tcs.PairWire.HelloType)
+                {
+                    await pairing.HandleAsync(stream, remote, serverCancellation);
+                    return;
+                }
+                var handshake = await HandshakeAsync(stream, prefix, timeout.Token);
                 if (handshake is null) return;
                 var request = await ReadRequestAsync(stream, handshake.Value.Session, timeout.Token);
                 var response = await HandleHttpAsync(request.HttpBytes, handshake.Value.ClientFingerprint, timeout.Token);
@@ -89,18 +190,21 @@ public sealed class tcsd
             }
             catch (OperationCanceledException exception)
             {
-                Console.Error.WriteLine($"tcsd: connection ended: {(serverCancellation.IsCancellationRequested ? "服务停止" : "连接处理超过 60 秒")}；{exception.Message}");
+                Console.Error.WriteLine($"tcsd: connection ended: {(serverCancellation.IsCancellationRequested ? "server stopping" : "handling took longer than 60 seconds")}; {exception.Message}");
             }
         }
     }
 
-    async Task<(TcsWire.Session Session, string ClientFingerprint)?> HandshakeAsync(NetworkStream stream, CancellationToken cancellationToken)
+    async Task<(TcsWire.Session Session, string ClientFingerprint)?> HandshakeAsync(NetworkStream stream, (byte Type, ushort Version, ushort Cipher) prefix, CancellationToken cancellationToken)
     {
-        var hello = await TcsWire.ReadClientHelloAsync(stream, cancellationToken);
+        var hello = await TcsWire.ReadClientHelloAsync(stream, cancellationToken, prefix);
         var clientKey = OpenSshPublicKeyUtilities.ParsePublicKey(hello.Blob);
-        if (!authorizedBlobs.Any(blob => blob.SequenceEqual(hello.Blob)))
+        var clientFingerprint = Tcs.Pairing.Fingerprint(hello.Blob);
+        if (!IsAuthorized(hello.Blob))
         {
-            throw new CryptographicException($"client key is not authorized；主控指纹 {Tcs.Pairing.Fingerprint(hello.Blob)}，请核对并导入正确的配对文件，重启 tcsd 加载授权。");
+            Audit("auth-denied", clientFingerprint, "NOT_AUTHORIZED", null);
+            await TcsWire.WriteAllAsync(stream, TcsWire.BuildReject(TcsWire.RejectNotAuthorized, $"controller key {clientFingerprint} is not authorized on this computer"), cancellationToken);
+            throw new CryptographicException($"client key is not authorized; controller fingerprint {clientFingerprint}. Pair it with tcsd pair, then retry.");
         }
         var (serverEphemeral, serverEphemeralPublic) = TcsCrypto.NewEphemeral();
         var serverNonce = RandomNumberGenerator.GetBytes(32);
@@ -111,20 +215,22 @@ public sealed class tcsd
         var first = new byte[1];
         if (await stream.ReadAsync(first, cancellationToken) == 0)
         {
-            Console.Error.WriteLine("tcsd: 主机身份已发送，对端在认证前结束连接（可能为首次指纹探测或主动取消）；未认证，未执行指令或上传。此日志不表示配对已成功。");
+            Console.Error.WriteLine("tcsd: host identity sent; the peer closed before authenticating (probably a first-use fingerprint probe or a cancel). Nothing was authenticated, run or uploaded. This line does not mean pairing succeeded.");
             return null;
         }
         var clientSignature = await TcsWire.ReadClientAuthAsync(stream, cancellationToken, first[0]);
         var expected = TcsCrypto.HashLabel("TCS1/client", hello.Raw, serverHello);
         if (!TcsCrypto.Verify(clientKey, expected, clientSignature))
         {
+            Audit("auth-denied", clientFingerprint, "BAD_SIGNATURE", null);
             throw new CryptographicException("invalid client signature");
         }
         var clientAuth = TcsWire.BuildClientAuth(clientSignature);
         var shared = TcsCrypto.Agree(serverEphemeral, hello.Ephemeral);
         var transcript = SHA256.HashData(hello.Raw.Concat(serverHello).Concat(clientAuth).ToArray());
         var session = new TcsWire.Session(TcsCrypto.Derive(shared, transcript), client: false);
-        return (session, Convert.ToHexString(TcsCrypto.Fingerprint(hello.Blob)));
+        Audit("auth-ok", clientFingerprint, "OK", null);
+        return (session, clientFingerprint);
     }
 
     static async Task<(byte[] HttpBytes, uint StreamId)> ReadRequestAsync(NetworkStream stream, TcsWire.Session session, CancellationToken cancellationToken)
@@ -220,7 +326,7 @@ public sealed class tcsd
                 request.MaxOutput is >= 0 ? request.MaxOutput.Value : Tcs.OutputCap.DefaultLimit, cancellationToken);
             started.Stop();
             WriteAudit(JsonSerializer.Serialize(
-                new TcsExecAudit(DateTimeOffset.UtcNow, "/v1/exec", fingerprint, started.ElapsedMilliseconds, result.ExitCode, result.TimedOut),
+                new TcsExecAudit(DateTimeOffset.UtcNow, "/v1/exec", fingerprint, started.ElapsedMilliseconds, result.ExitCode, result.TimedOut, CurrentSource.Value, Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(request.Script))).ToLowerInvariant()),
                 TcsJsonContext.Default.TcsExecAudit));
             return HttpResponse(200, "application/json", JsonSerializer.Serialize(result, TcsJsonContext.Default.ExecResult));
         }
@@ -266,7 +372,7 @@ public sealed class tcsd
         var stored = $"{DateTimeOffset.UtcNow:yyyyMMddTHHmmssZ}_{Guid.NewGuid():N}_{filename}";
         await File.WriteAllBytesAsync(Path.Combine(uploadsDirectory, stored), body[dataStart..dataEnd], cancellationToken);
         WriteAudit(JsonSerializer.Serialize(
-            new TcsUploadAudit(DateTimeOffset.UtcNow, "/v1/upload", fingerprint, new[] { stored }),
+            new TcsUploadAudit(DateTimeOffset.UtcNow, "/v1/upload", fingerprint, new[] { stored }, CurrentSource.Value),
             TcsJsonContext.Default.TcsUploadAudit));
         return HttpResponse(200, "application/json", JsonSerializer.Serialize(
             new UploadResponse(new[] { stored }), TcsJsonContext.Default.UploadResponse));
@@ -330,6 +436,13 @@ public sealed class tcsd
     {
         lock (auditLock)
         {
+            var info = new FileInfo(auditPath);
+            if (info.Exists && info.Length >= AuditRotateBytes)
+                for (var index = 3; index >= 1; index--)   // tcs-audit.log -> .1 -> .2 -> .3 (oldest dropped)
+                {
+                    var from = index == 1 ? auditPath : auditPath + "." + (index - 1);
+                    if (File.Exists(from)) File.Move(from, auditPath + "." + index, true);
+                }
             File.AppendAllText(auditPath, line + Environment.NewLine);
         }
     }

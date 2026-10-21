@@ -19,14 +19,14 @@ for option in ("--data", "--host-key", "--authorized-keys", "--client-key", "--s
     for mode in ([], ["--tcsd"], ["pairing", "export"], ["--tcsd", "pairing", "import", "missing.json"]):
         daemon_mode = "--tcsd" in mode
         rejected = run(exe, *mode, option, "unused", code=1 if daemon_mode else 255)
-        assert "不再支持" in rejected.stderr and "固定路径" in rejected.stderr
+        assert "no longer supported" in rejected.stderr and "fixed" in rejected.stderr
     run(exe, option + "=unused", code=255)
 run(exe, "--generate-host-key", "unused", code=255)
 run(exe, "--verify-install", code=255)
 for mode in ([], ["--tcsd"]):
     help_text = run(exe, *mode, "--help").stdout
     assert "--data" not in help_text and "--client-key" not in help_text
-    assert "固定" in help_text
+    assert "Fixed locations" in help_text
 run(exe, "--check-install", "invalid", code=255)
 print("PASS shipping CLI refuses all path overrides and key generation; fixed-path help")
 
@@ -35,7 +35,7 @@ with tempfile.TemporaryDirectory(prefix="tcs-preflight-") as directory:
     renamed = root / "renamed-tcs.exe"
     shutil.copyfile(exe, renamed)
     legacy_attempt = run(renamed, "-i", root, "-p", "10122", code=255)
-    assert "参数" in legacy_attempt.stderr
+    assert "Unknown option" in legacy_attempt.stderr
     assert not (root / "tcs-audit.log").exists()
     run(renamed, "--host-key", "unused", code=255)
     key, other = root / "identity", root / "other"

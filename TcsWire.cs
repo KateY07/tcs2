@@ -67,6 +67,23 @@ static class TcsWire
         return output.ToArray();
     }
 
+    // Plaintext refusal sent instead of ServerHello (for example when the controller key is not authorized).
+    public const byte RejectType = 0xFE;
+    public const ushort RejectNotAuthorized = 1, RejectBadSignature = 2, RejectProtocol = 3;
+
+    public static byte[] BuildReject(ushort code, string text)
+    {
+        var message = Encoding.UTF8.GetBytes(text.Length > 512 ? text[..512] : text);
+        using var output = new MemoryStream();
+        WritePrefix(output, RejectType);
+        WriteU16(output, 1);
+        WriteU16(output, 0);
+        WriteU16(output, code);
+        WriteU16(output, (ushort)message.Length);
+        output.Write(message);
+        return output.ToArray();
+    }
+
     public static byte[] BuildClientAuth(byte[] signature)
     {
         using var output = new MemoryStream();
@@ -76,9 +93,9 @@ static class TcsWire
         return output.ToArray();
     }
 
-    public static async Task<(byte[] Blob, byte[] Ephemeral, byte[] Nonce, byte[] Raw)> ReadClientHelloAsync(Stream stream, CancellationToken cancellationToken)
+    public static async Task<(byte[] Blob, byte[] Ephemeral, byte[] Nonce, byte[] Raw)> ReadClientHelloAsync(Stream stream, CancellationToken cancellationToken, (byte Type, ushort Version, ushort Cipher)? alreadyRead = null)
     {
-        var prefix = await ReadPrefixAsync(stream, cancellationToken);
+        var prefix = alreadyRead ?? await ReadPrefixAsync(stream, cancellationToken);
         if (prefix.Type != 0x01 || prefix.Version != 1 || prefix.Cipher != 1)
         {
             throw new InvalidDataException("invalid ClientHello");
@@ -101,6 +118,15 @@ static class TcsWire
     public static async Task<(byte[] Blob, byte[] Ephemeral, byte[] Nonce, byte[] Signature, byte[] Raw)> ReadServerHelloAsync(Stream stream, CancellationToken cancellationToken)
     {
         var prefix = await ReadPrefixAsync(stream, cancellationToken);
+        if (prefix.Type == RejectType)
+        {
+            var head = new byte[4];
+            await ReadExactAsync(stream, head, cancellationToken);
+            var text = new byte[BinaryPrimitives.ReadUInt16BigEndian(head.AsSpan(2, 2))];
+            if (text.Length > 512) throw new InvalidDataException("oversized rejection");
+            await ReadExactAsync(stream, text, cancellationToken);
+            throw new TcsRejectedException(BinaryPrimitives.ReadUInt16BigEndian(head.AsSpan(0, 2)), Encoding.UTF8.GetString(text));
+        }
         if (prefix.Type != 0x02 || prefix.Version != 1 || prefix.Cipher != 1)
         {
             throw new InvalidDataException("invalid ServerHello");
@@ -209,7 +235,7 @@ static class TcsWire
         output.Write(bytes);
     }
 
-    static async Task<(byte Type, ushort Version, ushort Cipher)> ReadPrefixAsync(Stream stream, CancellationToken cancellationToken)
+    public static async Task<(byte Type, ushort Version, ushort Cipher)> ReadPrefixAsync(Stream stream, CancellationToken cancellationToken)
     {
         var bytes = new byte[9];
         await ReadExactAsync(stream, bytes, cancellationToken);
@@ -279,4 +305,11 @@ static class TcsWire
             return nonce;
         }
     }
+}
+
+// Raised on the controller when the controlled PC refuses the connection with an explicit reason.
+sealed class TcsRejectedException(ushort code, string reason) : Exception(reason)
+{
+    public ushort Code { get; } = code;
+    public string Name => Code switch { TcsWire.RejectNotAuthorized => "NOT_AUTHORIZED", TcsWire.RejectBadSignature => "BAD_SIGNATURE", _ => "REJECTED" };
 }

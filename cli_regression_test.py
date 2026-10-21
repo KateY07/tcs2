@@ -30,7 +30,7 @@ for args in [("alipc", "exec"), ("alipc", "upload"),
              ("alipc", "health", "--port", "abc"), ()]:
     rejected = run_any(exe, *args)
     assert rejected.returncode == 255, (args, rejected.returncode, rejected.stderr)
-    assert "用法: tcs <host>" in rejected.stderr and "tcs --help" in rejected.stderr, rejected.stderr
+    assert "usage: tcs <host>" in rejected.stderr and "tcs --help" in rejected.stderr, rejected.stderr
     assert "   at " not in rejected.stderr, "argument errors must not print stack traces"
     assert len(rejected.stderr) < 700, len(rejected.stderr)
 print("PASS AOT CLI rejects invalid syntax with exit 255 and a compact usage, no stack trace")

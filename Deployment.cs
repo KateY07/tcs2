@@ -15,17 +15,17 @@ internal static class Deployment
     {
         var name = server ? "tcs_host_key" : "id_ed25519";
         return $$"""
-若从未生成私钥，可在 PowerShell 运行以下脚本后重新安装。若已有身份，请先恢复原私钥到固定位置，不要重新生成。口令提示两次直接回车。
-找不到 ssh-keygen 时，请安装 Windows 可选功能“OpenSSH 客户端”，不需要 OpenSSH 服务器。
+If you have never created a private key, run the script below in PowerShell, then install again. If you already have an identity, restore the original private key to the fixed location; do not regenerate it. Press Enter twice at the passphrase prompts.
+If ssh-keygen is missing, install the Windows optional feature "OpenSSH Client" (the OpenSSH server is not needed).
 
 $ErrorActionPreference = 'Stop'
 $tcsKey = Join-Path $env:USERPROFILE '.ssh\{{name}}'
 New-Item -ItemType Directory -Force (Split-Path $tcsKey) | Out-Null
 if ((Test-Path -LiteralPath $tcsKey) -or (Test-Path -LiteralPath ($tcsKey + '.pub'))) {
-    throw "密钥或公钥已经存在，请检查并恢复原私钥，不要覆盖：$tcsKey"
+    throw "A key or public key already exists. Check and restore the original private key; do not overwrite: $tcsKey"
 } else {
     ssh-keygen -t ed25519 -f $tcsKey
-    if ($LASTEXITCODE -ne 0) { throw 'ssh-keygen 生成失败' }
+    if ($LASTEXITCODE -ne 0) { throw 'ssh-keygen failed' }
 }
 """;
     }
@@ -33,47 +33,48 @@ if ((Test-Path -LiteralPath $tcsKey) -or (Test-Path -LiteralPath ($tcsKey + '.pu
     internal static byte[] ValidatePair(string path)
     {
         if (!File.Exists(path))
-            throw new FileNotFoundException($"缺少私钥：{path}。请恢复已有身份或由用户提前生成；不要求 .pub 文件，不会自动生成密钥。");
+            throw new FileNotFoundException($"Private key not found: {path}. Restore the existing identity or create one beforehand; a .pub file is not required and keys are never generated automatically.");
         var key = TcsCrypto.ReadPrivateKey(path);
         var blob = TcsCrypto.PublicBlob(key);
         Pairing.PublicLine(blob);
         var challenge = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
         if (!TcsCrypto.Verify(Org.BouncyCastle.Crypto.Utilities.OpenSshPublicKeyUtilities.ParsePublicKey(blob), challenge, TcsCrypto.Sign(key, challenge)))
-            throw new InvalidDataException("密钥签名自检失败。");
+            throw new InvalidDataException("Key signature self-test failed.");
         return blob;
     }
 
     internal static void CheckInstall(string role)
     {
-        if (role is not ("controller" or "server")) throw new ArgumentException("安装角色必须为 controller 或 server。");
+        if (role is not ("controller" or "server")) throw new ArgumentException("The install role must be controller or server.");
         var server = role == "server";
         var path = server ? HostKey : ClientKey;
         byte[] blob;
         try { blob = ValidatePair(path); }
         catch (Exception)
         {
-            Console.Error.WriteLine($"安装前检查失败：{path}\n需要可读取、无口令的 OpenSSH 私钥；不要求 .pub 文件。不会修改密钥或继续安装。\n{KeyInstructions(server)}");
+            Console.Error.WriteLine($"Pre-install check failed: {path}\nA readable OpenSSH private key without a passphrase is required (a .pub file is not). Nothing was changed and the install will not continue.\n{KeyInstructions(server)}");
             throw;
         }
-        Console.WriteLine($"安装前检查通过：{path}\n公钥指纹（从私钥推导）：{Pairing.Fingerprint(blob)}");
+        Console.WriteLine($"Pre-install check passed: {path}\nPublic key fingerprint (derived from the private key): {Pairing.Fingerprint(blob)}");
     }
 
     // Cheap per-call check; the full sign/verify self-test stays in ValidatePair (install check, daemon start, pairing).
     internal static void RequireKey(string path)
     {
         if (!File.Exists(path))
-            throw new FileNotFoundException($"缺少私钥：{path}。请恢复已有身份或由用户提前生成；不要求 .pub 文件，不会自动生成密钥。");
+            throw new FileNotFoundException($"Private key not found: {path}. Restore the existing identity or create one beforehand; a .pub file is not required and keys are never generated automatically.");
     }
 
     internal static string? FailureHint(Exception error) => error switch
     {
-        SocketException socket when socket.SocketErrorCode is SocketError.HostNotFound or SocketError.NoData => "地址解析失败：请核对被控端名称，或使用其可达 IP 地址。",
-        SocketException socket when socket.SocketErrorCode == SocketError.ConnectionRefused => "TCP 连接被拒绝：请检查被控端 tcsd 是否运行、端口是否一致；本次未完成认证。",
-        SocketException => "TCP 网络连接失败：请检查地址、路由和该端口的防火墙规则。Ping/RDP 成功不代表此端口可达。",
-        EndOfStreamException => "对端在握手或传输完成前关闭连接：请检查被控端日志和主控公钥授权；不能仅凭断开判断为防火墙问题。",
-        OperationCanceledException or TimeoutException => "连接或握手超时/取消：请检查被控端状态和网络。不要自动重试可能已经执行的远程指令。",
-        FileNotFoundException => "缺少所需文件：密钥须提前放在固定路径；被控端缺少 authorized_keys 时先导入配对文件。",
-        System.Security.Cryptography.CryptographicException => "身份或签名校验失败：连接已拒绝。请通过可信渠道核对双方身份，不要盲目删除信任记录。",
+        TcsRejectedException rejected => $"The controlled PC rejected this controller ({rejected.Name}): {rejected.Message}. If this controller was never paired, run tcsd pair on the controlled PC, then tcs pair <host> <code> here.",
+        SocketException socket when socket.SocketErrorCode is SocketError.HostNotFound or SocketError.NoData => "Name resolution failed: check the computer name or use a reachable IP address.",
+        SocketException socket when socket.SocketErrorCode == SocketError.ConnectionRefused => "TCP connection refused: check that tcsd is running on the controlled PC and that both sides use the same port. Nothing was authenticated.",
+        SocketException => "TCP connection failed: check the address, routing and the firewall rule for this port. A working ping or RDP does not mean this port is reachable.",
+        EndOfStreamException => "The peer closed the connection during the handshake: check the tcsd log on the controlled PC. This does not by itself mean a firewall problem.",
+        OperationCanceledException or TimeoutException => "The connection or handshake timed out or was cancelled: check the controlled PC and the network. Do not retry blindly: a remote command may already have run.",
+        FileNotFoundException => "A required file is missing: keys must already exist in their fixed locations; if authorized_keys is missing on the controlled PC, pair first.",
+        System.Security.Cryptography.CryptographicException => "Identity or signature verification failed and the connection was refused. Verify both identities through a trusted channel; do not delete trust records blindly.",
         ArgumentException => null,
         _ => null
     };

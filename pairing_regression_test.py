@@ -147,7 +147,7 @@ with tempfile.TemporaryDirectory(prefix="tcs-pairing-test-") as temporary:
         assert json.loads(run(*options).stdout)["status"] == "ok"
         legacy = run("--host", "127.0.0.1", "--port", port, "--client-key", client,
                      "--known-hosts", root / "unused-known", "--legacy-key", legacy_public)
-        assert "旧固定公钥正在生效" in legacy.stderr and "不会询问首次确认" in legacy.stderr
+        assert "Legacy pinned key in effect" in legacy.stderr and "no first-use confirmation" in legacy.stderr
         assert json.loads(legacy.stdout)["status"] == "ok"
         result = json.loads(run(*options, "--operation", "exec", "--script", "print('paired')").stdout)
         assert result["ExitCode"] == 0 and result["Stdout"].strip() == "paired"
@@ -187,6 +187,6 @@ with tempfile.TemporaryDirectory(prefix="tcs-pairing-test-") as temporary:
             daemon.terminate()
             daemon.wait(timeout=10)
         log.close()
-    assert "可能为首次指纹探测或主动取消" in (root / "server.log").read_text(encoding="utf-8")
+    assert "probably a first-use fingerprint probe or a cancel" in (root / "server.log").read_text(encoding="utf-8")
     assert "connection rejected" in (root / "server.log").read_text(encoding="utf-8")
 print("ALL PAIRING REGRESSION TESTS PASSED")

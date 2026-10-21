@@ -14,9 +14,30 @@ internal static class HostTrust
         var endpoint = EndpointPath(host, port, Deployment.KnownHosts);
         if (File.Exists(endpoint)) return endpoint;
         if (File.Exists(Deployment.HostKey + ".pub")) return Deployment.HostKey + ".pub";
-        throw new InvalidOperationException("尚未固定此被控端身份，请先通过 tcs --host 连接并核对指纹。");
+        throw new InvalidOperationException("This controlled PC is not trusted yet: connect once with tcs <host> and verify its fingerprint, or pair with tcs pair <host> <code>.");
     }
 #endif
+
+    // Pins the host key learned by pairing; the pairing code authenticated it, so there is no fingerprint to compare by eye.
+#if TCS_TESTING
+    internal static void PinPaired(string host, int port, string directory, byte[] blob)
+#else
+    internal static void PinPaired(string host, int port, byte[] blob)
+#endif
+    {
+#if !TCS_TESTING
+        var directory = Deployment.KnownHosts;
+#endif
+        var path = EndpointPath(host, port, directory);
+        if (File.Exists(path))
+        {
+            if (!TcsCrypto.ReadPublicKeyBlob(path).SequenceEqual(blob))
+                throw new CryptographicException("This host is already pinned to a different identity; pairing will not overwrite it. If the controlled PC was reinstalled, remove its saved trust record first.");
+            return;
+        }
+        Directory.CreateDirectory(directory);
+        Pairing.AtomicWrite(path, Pairing.PublicLine(blob) + "\n", false);
+    }
 
     static string EndpointPath(string host, int port, string directory)
     {
@@ -41,31 +62,31 @@ internal static class HostTrust
         {
             var savedFingerprint = Pairing.Fingerprint(TcsCrypto.ReadPublicKeyBlob(existing));
             if (existing != path)
-                Console.Error.WriteLine($"旧固定公钥正在生效：{existing}\n固定指纹：{savedFingerprint}\n目标 [{host}]:{port} 没有独立记录，使用旧固定公钥严格校验，因此不会询问首次确认。若目标不匹配将拒绝连接，请勿盲目删除或覆盖此文件。");
-            else if (Verbose) Console.Error.WriteLine($"正在校验已保存的被控端身份：[{host}]:{port}\n信任记录：{existing}");
+                Console.Error.WriteLine($"Legacy pinned key in effect: {existing}\nPinned fingerprint: {savedFingerprint}\nTarget [{host}]:{port} has no record of its own, so the legacy key is checked strictly and no first-use confirmation is asked. If the target does not match the connection is refused; do not delete or overwrite this file blindly.");
+            else if (Verbose) Console.Error.WriteLine($"Verifying the saved identity of the controlled PC: [{host}]:{port}\nTrust record: {existing}");
             if (expected is not null && Pairing.Fingerprint(TcsCrypto.ReadPublicKeyBlob(existing)) != expected)
-                throw new CryptographicException("提供的指纹与已固定公钥不一致；不会覆盖原身份。");
+                throw new CryptographicException("The provided fingerprint does not match the pinned key; the original identity is not overwritten.");
             return existing;
         }
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-        Console.Error.WriteLine($"正在探测 [{host}]:{port} 的主机身份；核对完成前不发送指令或文件。");
+        Console.Error.WriteLine($"Probing the host identity of [{host}]:{port}; no commands or files are sent until you confirm.");
 #if TCS_TESTING
         var blob = await global::tcs.InspectServerKeyAsync(host, port, identity, deadline.Token);
 #else
         var blob = await global::tcs.InspectServerKeyAsync(host, port, deadline.Token);
 #endif
         var fingerprint = Pairing.Fingerprint(blob);
-        Console.Error.WriteLine($"首次连接被控端 [{host}]:{port}\n被控端主机指纹：{fingerprint}");
+        Console.Error.WriteLine($"First connection to controlled PC [{host}]:{port}\nHost fingerprint: {fingerprint}");
         Pairing.Confirm(fingerprint, expected);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         try { Pairing.AtomicWrite(path, Pairing.PublicLine(blob) + "\n", false); }
         catch (IOException) when (File.Exists(path))
         {
             if (!TcsCrypto.ReadPublicKeyBlob(path).SequenceEqual(blob))
-                throw new CryptographicException("另一个进程已保存不同的主机公钥；拒绝覆盖。");
-            Console.Error.WriteLine("其他连接已保存相同的主机公钥。");
+                throw new CryptographicException("Another process already saved a different host key; refusing to overwrite.");
+            Console.Error.WriteLine("Another connection already saved the same host key.");
         }
-        Console.Error.WriteLine($"已固定被控端公钥：{path}\n正在使用已确认的身份重新连接……");
+        Console.Error.WriteLine($"Pinned the host key: {path}\nReconnecting with the confirmed identity...");
         return path;
     }
 }

@@ -23,13 +23,25 @@ public sealed record TcsExecAudit(
     [property: JsonPropertyName("clientFingerprint")] string ClientFingerprint,
     [property: JsonPropertyName("durationMs")] long DurationMs,
     [property: JsonPropertyName("exitCode")] int? ExitCode,
-    [property: JsonPropertyName("timedOut")] bool TimedOut);
+    [property: JsonPropertyName("timedOut")] bool TimedOut,
+    [property: JsonPropertyName("source")] string? Source = null,
+    [property: JsonPropertyName("scriptSha256")] string? ScriptSha256 = null);
+
+// Connection, denial and pairing events (JSON lines in tcs-audit.log).
+public sealed record TcsEventAudit(
+    [property: JsonPropertyName("timestamp")] DateTimeOffset Timestamp,
+    [property: JsonPropertyName("event")] string Event,
+    [property: JsonPropertyName("source")] string? Source,
+    [property: JsonPropertyName("clientFingerprint")] string? ClientFingerprint,
+    [property: JsonPropertyName("result")] string Result,
+    [property: JsonPropertyName("detail")] string? Detail);
 
 public sealed record TcsUploadAudit(
     [property: JsonPropertyName("timestamp")] DateTimeOffset Timestamp,
     [property: JsonPropertyName("endpoint")] string Endpoint,
     [property: JsonPropertyName("clientFingerprint")] string ClientFingerprint,
-    [property: JsonPropertyName("files")] string[] Files);
+    [property: JsonPropertyName("files")] string[] Files,
+    [property: JsonPropertyName("source")] string? Source = null);
 
 public sealed record LegacyExecAudit(
     [property: JsonPropertyName("timestamp")] DateTimeOffset Timestamp,
@@ -54,6 +66,7 @@ public sealed record LegacyUploadAudit(
 [JsonSerializable(typeof(UploadResponse))]
 [JsonSerializable(typeof(TcsExecAudit))]
 [JsonSerializable(typeof(TcsUploadAudit))]
+[JsonSerializable(typeof(TcsEventAudit))]
 [JsonSerializable(typeof(LegacyExecAudit))]
 [JsonSerializable(typeof(LegacyUploadAudit))]
 internal partial class TcsJsonContext : JsonSerializerContext;

@@ -12,7 +12,7 @@ internal static class Pairing
     {
         var key = OpenSshPublicKeyUtilities.ParsePublicKey(blob);
         if (key is not (Org.BouncyCastle.Crypto.Parameters.Ed25519PublicKeyParameters or Org.BouncyCastle.Crypto.Parameters.RsaKeyParameters or Org.BouncyCastle.Crypto.Parameters.ECPublicKeyParameters))
-            throw new InvalidDataException("不支持的配对公钥类型。");
+            throw new InvalidDataException("Unsupported pairing key type.");
         var length = System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(blob);
         return Encoding.ASCII.GetString(blob, 4, length) + " " + Convert.ToBase64String(blob);
     }
@@ -22,13 +22,13 @@ internal static class Pairing
         if (expected is not null)
         {
             if (!string.Equals(expected, fingerprint, StringComparison.Ordinal))
-                throw new InvalidOperationException($"指纹不匹配。实际：{fingerprint}；提供：{expected}");
+                throw new InvalidOperationException($"Fingerprint mismatch. Actual: {fingerprint}; provided: {expected}");
             return;
         }
         if (Console.IsInputRedirected)
-            throw new InvalidOperationException($"需要交互式核对指纹 {fingerprint}。请在终端运行，或用 --trust-fingerprint 指定通过可信渠道核对的完整指纹。");
-        Console.Error.Write("请通过可信渠道核对以上指纹。确认信任请输入 yes，其他输入取消：");
-        if (Console.ReadLine() != "yes") throw new InvalidOperationException("已取消，未授权或保存新身份。");
+            throw new InvalidOperationException($"The fingerprint {fingerprint} must be verified interactively. Run in a terminal, or pass --trust-fingerprint with the full fingerprint verified through a trusted channel.");
+        Console.Error.Write("Verify the fingerprint above through a trusted channel. Type yes to trust it, anything else cancels: ");
+        if (Console.ReadLine() != "yes") throw new InvalidOperationException("Cancelled. Nothing was authorized or saved.");
     }
 
 #if TCS_TESTING
@@ -56,7 +56,7 @@ internal static class Pairing
         }
         using (var file = new FileStream(Path.GetFullPath(output), FileMode.CreateNew, FileAccess.Write, FileShare.None))
             file.Write(buffer.ToArray());
-        Console.WriteLine($"配对文件：{Path.GetFullPath(output)}\n主控公钥指纹：{fingerprint}\n请通过可信方式把文件交给被控端，并核对导入时显示的指纹。文件不含私钥。");
+        Console.WriteLine($"Pairing file: {Path.GetFullPath(output)}\nController key fingerprint: {fingerprint}\nDeliver the file to the controlled PC through a trusted channel and verify the fingerprint shown at import. The file contains no private key.");
     }
 
 #if TCS_TESTING
@@ -73,26 +73,26 @@ internal static class Pairing
         byte[] blob;
         using (var file = new FileStream(input, FileMode.Open, FileAccess.Read, FileShare.Read))
         {
-            if (file.Length > 16384) throw new InvalidDataException("配对文件超过 16 KiB 限制。");
+            if (file.Length > 16384) throw new InvalidDataException("The pairing file exceeds the 16 KiB limit.");
             using var json = JsonDocument.Parse(file, new() { MaxDepth = 4 });
             var root = json.RootElement;
-            if (root.ValueKind != JsonValueKind.Object) throw new InvalidDataException("配对文件必须是 JSON 对象。");
+            if (root.ValueKind != JsonValueKind.Object) throw new InvalidDataException("The pairing file must be a JSON object.");
             HashSet<string> fields = [];
             foreach (var property in root.EnumerateObject())
                 if (property.Name is not ("type" or "version" or "publicKey" or "fingerprint") || !fields.Add(property.Name))
-                    throw new InvalidDataException("配对文件包含未知或重复字段。");
+                    throw new InvalidDataException("The pairing file contains unknown or duplicate fields.");
             if (fields.Count != 4 || root.GetProperty("type").GetString() != "tcs-pairing" || root.GetProperty("version").GetInt32() != 1)
-                throw new InvalidDataException("不支持的配对文件格式或版本。");
+                throw new InvalidDataException("Unsupported pairing file format or version.");
             var parts = (root.GetProperty("publicKey").GetString() ?? "").Split(' ');
-            if (parts.Length != 2) throw new InvalidDataException("配对公钥格式不正确。");
+            if (parts.Length != 2) throw new InvalidDataException("Malformed pairing public key.");
             blob = Convert.FromBase64String(parts[1]);
             if (PublicLine(blob) != string.Join(' ', parts) || root.GetProperty("fingerprint").GetString() != Fingerprint(blob))
-                throw new InvalidDataException("配对公钥与文件中记录的类型或指纹不一致。");
+                throw new InvalidDataException("The pairing public key does not match the key type or fingerprint recorded in the file.");
         }
         authorizedKeys = Path.GetFullPath(authorizedKeys);
         hostKey = Path.GetFullPath(hostKey);
         var fingerprint = Fingerprint(blob);
-        Console.Error.WriteLine($"待授权主控公钥指纹：{fingerprint}\n授权文件：{authorizedKeys}");
+        Console.Error.WriteLine($"Controller key to authorize: {fingerprint}\nAuthorized keys file: {authorizedKeys}");
         var already = File.Exists(authorizedKeys) && TcsCrypto.ReadAuthorizedKeys(authorizedKeys).Any(key => key.SequenceEqual(blob));
         if (!already || expected is not null) Confirm(fingerprint, expected);
         Directory.CreateDirectory(Path.GetDirectoryName(hostKey)!);
@@ -105,7 +105,7 @@ internal static class Pairing
             var existing = File.Exists(authorizedKeys) ? File.ReadAllText(authorizedKeys) : "";
             if (!File.Exists(authorizedKeys) || !TcsCrypto.ReadAuthorizedKeys(authorizedKeys).Any(key => key.SequenceEqual(blob)))
                 AtomicWrite(authorizedKeys, existing + (existing.Length > 0 && !existing.EndsWith('\n') ? "\n" : "") + PublicLine(blob) + "\n", true);
-            Console.WriteLine($"主控端已授权。\n被控端主机指纹：{Fingerprint(hostBlob)}\n请在主控端首次连接时核对这个指纹；无需传回回执文件。\n启动被控端：tcsd\n数据固定目录：{Deployment.Data}\n如果被控端已在运行，请重启以加载授权。");
+            Console.WriteLine($"Controller authorized.\nControlled PC host fingerprint: {Fingerprint(hostBlob)}\nVerify this fingerprint on the controller at the first connection; no receipt file is needed.\nStart the daemon: tcsd\nFixed data folder: {Deployment.Data}\nA running tcsd picks up the new key automatically.");
         }
         return Task.CompletedTask;
     }

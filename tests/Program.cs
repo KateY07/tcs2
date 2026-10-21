@@ -49,6 +49,24 @@ try
         Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new { health, exec }));
         return;
     }
+    if (args[0] == "--pair-client")
+    {
+        // --pair-client <client-key> <known-hosts-dir> <host> <port> <code>: the controller side of "tcs pair" with explicit test paths.
+        var clientBlob = TcsCrypto.PublicBlob(TcsCrypto.ReadPrivateKey(args[1]));
+        try
+        {
+            var (hostBlob, already) = await PairClient.PairAsync(args[3], int.Parse(args[4]), args[5], clientBlob, CancellationToken.None);
+            HostTrust.PinPaired(args[3], int.Parse(args[4]), args[2], hostBlob);
+            Console.WriteLine((already ? "ALREADY_PAIRED " : "PAIRED ") + Pairing.Fingerprint(hostBlob));
+            return;
+        }
+        catch (PairException refused)
+        {
+            Console.WriteLine($"{PairException.Name(refused.Result)} attemptsLeft={refused.AttemptsLeft} retryAfter={refused.RetryAfterSeconds}");
+            Environment.ExitCode = PairException.ExitCode(refused.Result);
+            return;
+        }
+    }
     if (args[0] == "--audit-production")
     {
         var assembly = System.Reflection.Assembly.LoadFrom(Path.GetFullPath(args[1]));
@@ -104,7 +122,9 @@ try
     if (args[0] == "--tcsd")
     {
         Environment.SetEnvironmentVariable("TCS_PYTHON_EXE", Option("--python", "python"));
-        await new tcsd(Option("--authorized-keys"), Option("--host-key"), Option("--data")).RunAsync(IPAddress.Any, int.Parse(Option("--port", "10122")));
+        var daemon = new tcsd(Option("--authorized-keys"), Option("--host-key"), Option("--data"), int.Parse(Option("--pair-seconds", "60")));
+        if (args.Contains("--pair")) { daemon.OpenPairingOnStart = true; daemon.FixedPairingCode = args.Contains("--pair-code") ? Option("--pair-code") : null; }
+        await daemon.RunAsync(IPAddress.Any, int.Parse(Option("--port", "10122")));
         return;
     }
     var host = Option("--host", "127.0.0.1");

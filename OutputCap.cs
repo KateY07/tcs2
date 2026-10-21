@@ -36,6 +36,6 @@ internal static class OutputCap
         var omitted = total - limit;
         if (head.Length > 0 && char.IsHighSurrogate(head[^1])) { head.Length--; omitted++; }
         if (tailText.Length > 0 && char.IsLowSurrogate(tailText[0])) { tailText = tailText[1..]; omitted++; }
-        return ($"{head}\n...[tcs: 截断 {omitted} 字符；请在脚本中过滤/汇总输出，或加 --max-output 0]...\n{tailText}", omitted);
+        return ($"{head}\n...[tcs: {omitted} characters omitted; filter or summarize the output in your script, or add --max-output 0]...\n{tailText}", omitted);
     }
 }

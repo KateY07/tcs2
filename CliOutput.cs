@@ -13,8 +13,8 @@ internal static class CliOutput
     internal const int Timeout = 124;
     internal const int UnmappableRemoteExit = 254;
 
-    internal const string ClientUsage = "用法: tcs <host> [health | exec <py源码> | exec --file <f.py> | upload <file>] [--port N] [--max-output N] [--json] [--meta]\n详情: tcs --help";
-    internal const string DaemonUsage = "用法: tcsd [--port N] [--python <path>] | tcsd pairing import <file.tcs-pair>\n详情: tcsd --help";
+    internal const string ClientUsage = "usage: tcs <host> [health | exec <py source> | exec --file <f.py> | upload <file>] [--port N] [--max-output N] [--json] [--meta]\n       tcs pair <host> <code> [--port N]\ndetails: tcs --help";
+    internal const string DaemonUsage = "usage: tcsd [--port N] [--python <path>] | tcsd pair | tcsd pairing import <file.tcs-pair> | tcsd audit [--tail N]\ndetails: tcsd --help";
 
     internal static int Render(string operation, JsonElement result, IReadOnlyDictionary<string, string> options, TextWriter stdout, TextWriter stderr, TimeSpan total)
     {
