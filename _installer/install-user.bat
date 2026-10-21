@@ -49,16 +49,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0set-user-path.ps1"
 if errorlevel 1 goto failed
 echo No keys created or copied. No service or firewall changes.
 echo Read "%TARGET%\README.md" to configure keys and start manually.
-if defined ROLE_PRESET goto finished
 if /i "%TCS_ROLE%"=="controller" goto controller_hint
-echo .info Pairing the controller
-echo .progress 90
-echo .ask Open a one-minute pairing window now? A code appears in a new window; type it on the controller with: tcs pair THIS-PC CODE
-set "PAIR="
-set /p PAIR=
-if /i not "%PAIR%"=="yes" goto finished
-start "TCS pairing" "%TARGET%\tcsd.exe" pair
-echo .warn If Windows asks about the firewall, allow tcsd on private networks. That needs an administrator.
+echo .info To pair: run  tcsd pair  here, then  tcs pair THIS-PC CODE  on the controller
 goto finished
 :controller_hint
 echo .info To pair: run tcsd pair on the controlled PC, then tcs pair HOST CODE here

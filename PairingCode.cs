@@ -33,6 +33,7 @@ internal enum PairResult : ushort
     Expired = 15,
     ProtocolError = 16,
     InternalError = 17,
+    NoResponse = 18,   // client side: the controlled PC dropped the connection without a word (silent penalty)
 }
 
 internal sealed class PairException : Exception
@@ -59,6 +60,7 @@ internal sealed class PairException : Exception
         PairResult.Busy => "BUSY",
         PairResult.Expired => "EXPIRED",
         PairResult.ProtocolError => "PROTOCOL_ERROR",
+        PairResult.NoResponse => "NO_RESPONSE",
         _ => "INTERNAL_ERROR"
     };
 
@@ -96,11 +98,11 @@ internal static class Spake2
         var digits = new string(code.Where(char.IsAsciiDigit).ToArray());
         var separators = code.Count(c => c is '-' or ' ');
         if (digits.Length != 6 || digits.Length + separators != code.Length)
-            throw new ArgumentException("The pairing code is six digits, for example 481-937.");
+            throw new ArgumentException("The pairing code is six digits, for example 481937.");
         return digits;
     }
 
-    public static string FormatCode(string digits) => digits[..3] + "-" + digits[3..];
+    public static string FormatCode(string digits) => digits;
 
     static BigInteger Password(string digits)
     {
@@ -266,9 +268,16 @@ internal static class PairClient
         var party = new Spake2.Party(digits, isClient: true);
         await TcsWire.WriteAllAsync(stream, PairWire.Prefix().Concat(party.Message).ToArray(), ct);
 
-        await PairWire.ExpectOkAsync(stream, ct);
         var reply = new byte[65 + 32];
-        await TcsWire.ReadExactAsync(stream, reply, ct);
+        try
+        {
+            await PairWire.ExpectOkAsync(stream, ct);
+            await TcsWire.ReadExactAsync(stream, reply, ct);
+        }
+        catch (Exception exception) when (exception is EndOfStreamException or IOException)
+        {
+            throw new PairException(PairResult.NoResponse, "The controlled PC closed the connection without replying. After repeated wrong codes it ignores this address for a while; wait a minute, then run tcsd pair again.");
+        }
         var keys = party.Finish(reply[..65]);
         if (!CryptographicOperations.FixedTimeEquals(reply.AsSpan(65), Spake2.Confirm(keys.ConfirmServer, "server", keys.TranscriptHash)))
             throw new PairException(PairResult.BadCode, "The pairing code is wrong (or the connection is not the PC that showed it).");
@@ -293,7 +302,7 @@ internal static class PairClient
 internal sealed class PairingServer
 {
     public const int DefaultSeconds = 60, DefaultAttempts = 3;
-    const int MinSecondsBetweenAttempts = 2, FailuresBeforeBlock = 3, BlockMinutes = 10, ProbesPerMinute = 10, StepTimeoutSeconds = 5;
+    const int MinSecondsBetweenAttempts = 2, LongSilentMinutes = 10, ProbesPerMinute = 10, StepTimeoutSeconds = 5;
 
     sealed class Window
     {
@@ -308,7 +317,8 @@ internal sealed class PairingServer
     sealed class Peer
     {
         public int Failures;
-        public DateTimeOffset BlockedUntil, LastAttempt;
+        public bool SilentLogged;
+        public DateTimeOffset SilentUntil, LastAttempt;   // while SilentUntil is in the future the address gets no reply at all
         public DateTimeOffset ProbeWindowStart;
         public int Probes;
     }
@@ -317,14 +327,14 @@ internal sealed class PairingServer
     readonly Func<byte[], bool> authorize;          // adds the controller key; returns true if it was already authorized
     readonly Action<string, string?, string, string?> audit;   // event, fingerprint, result, detail
     readonly Action<string> log;
-    readonly int seconds, attempts;
+    readonly int seconds, attempts, silentSeconds;
     readonly object gate = new();
     readonly Dictionary<IPAddress, Peer> peers = [];
     Window? window;
     DateTimeOffset lastClosed;
     string lastCloseReason = "";
 
-    public PairingServer(byte[] hostBlob, Func<byte[], bool> authorize, Action<string, string?, string, string?> audit, Action<string> log, int seconds = DefaultSeconds, int attempts = DefaultAttempts)
+    public PairingServer(byte[] hostBlob, Func<byte[], bool> authorize, Action<string, string?, string, string?> audit, Action<string> log, int seconds = DefaultSeconds, int attempts = DefaultAttempts, int silentSeconds = 60)
     {
         this.hostBlob = hostBlob;
         this.authorize = authorize;
@@ -332,6 +342,7 @@ internal sealed class PairingServer
         this.log = log;
         this.seconds = seconds;
         this.attempts = attempts;
+        this.silentSeconds = silentSeconds;
     }
 
     public bool IsOpen { get { lock (gate) return window is { } w && w.Expires > DateTimeOffset.UtcNow && w.AttemptsLeft > 0; } }
@@ -369,7 +380,7 @@ internal sealed class PairingServer
     Peer PeerFor(IPAddress address, DateTimeOffset now)
     {
         if (peers.Count > 2048)
-            foreach (var stale in peers.Where(p => p.Value.BlockedUntil < now && now - p.Value.LastAttempt > TimeSpan.FromMinutes(BlockMinutes)).Select(p => p.Key).ToList())
+            foreach (var stale in peers.Where(p => p.Value.SilentUntil < now && now - p.Value.LastAttempt > TimeSpan.FromMinutes(LongSilentMinutes)).Select(p => p.Key).ToList())
                 peers.Remove(stale);
         if (!peers.TryGetValue(address, out var peer)) peers[address] = peer = new Peer();
         return peer;
@@ -388,6 +399,26 @@ internal sealed class PairingServer
         var consumed = false;
         try
         {
+            var dropSilently = false;
+            var firstDrop = false;
+            lock (gate)
+            {
+                var now = DateTimeOffset.UtcNow;
+                var known = PeerFor(source, now);
+                if (known.SilentUntil > now)
+                {
+                    dropSilently = true;
+                    firstDrop = !known.SilentLogged;
+                    known.SilentLogged = true;
+                }
+            }
+            if (dropSilently)
+            {
+                // The penalty: no reply, no error, nothing to learn. The caller just sees the connection close.
+                if (firstDrop) audit("pair-attempt", null, "SILENT_DROP", $"source={source}");
+                return;
+            }
+
             using var firstStep = CancellationTokenSource.CreateLinkedTokenSource(ct);
             firstStep.CancelAfter(TimeSpan.FromSeconds(StepTimeoutSeconds));
             var x = new byte[65];
@@ -398,18 +429,20 @@ internal sealed class PairingServer
             {
                 var now = DateTimeOffset.UtcNow;
                 var peer = PeerFor(source, now);
-                if (peer.BlockedUntil > now)
-                    refusal = new PairException(PairResult.RateLimited, "Too many failed attempts from this address.", -1, (int)Math.Ceiling((peer.BlockedUntil - now).TotalSeconds));
-                else if (now - peer.LastAttempt < TimeSpan.FromSeconds(MinSecondsBetweenAttempts))
+                if (now - peer.LastAttempt < TimeSpan.FromSeconds(MinSecondsBetweenAttempts))
                     refusal = new PairException(PairResult.RateLimited, "Slow down: one pairing attempt every 2 seconds.", -1, MinSecondsBetweenAttempts);
                 peer.LastAttempt = now;
                 if (refusal is null && window is not { } w2)
                 {
                     if (now - peer.ProbeWindowStart > TimeSpan.FromMinutes(1)) { peer.ProbeWindowStart = now; peer.Probes = 0; }
                     peer.Probes++;
-                    refusal = peer.Probes > ProbesPerMinute
-                        ? new PairException(PairResult.RateLimited, "Too many pairing probes.", -1, 60)
-                        : lastCloseReason == "expired" && now - lastClosed < TimeSpan.FromMinutes(2)
+                    if (peer.Probes > ProbesPerMinute)
+                    {
+                        peer.SilentUntil = now.AddSeconds(silentSeconds);   // probe flood outside a window: go quiet on this address
+                        peer.SilentLogged = false;
+                        return;
+                    }
+                    refusal = lastCloseReason == "expired" && now - lastClosed < TimeSpan.FromMinutes(2)
                             ? new PairException(PairResult.Expired, "The pairing window has expired. Run tcsd pair again.")
                             : lastCloseReason == "locked" && now - lastClosed < TimeSpan.FromMinutes(2)
                                 ? new PairException(PairResult.Locked, "Too many wrong codes: the pairing window is locked. Run tcsd pair again.")
@@ -516,8 +549,12 @@ internal sealed class PairingServer
     {
         lock (gate)
         {
-            var peer = PeerFor(source, DateTimeOffset.UtcNow);
-            if (++peer.Failures >= FailuresBeforeBlock) peer.BlockedUntil = DateTimeOffset.UtcNow.AddMinutes(BlockMinutes);
+            var now = DateTimeOffset.UtcNow;
+            var peer = PeerFor(source, now);
+            peer.Failures++;
+            // 1st failure: forgiven as a typo. 2nd: silent for a minute. 3rd or more: silent for ten minutes.
+            if (peer.Failures >= 3) { peer.SilentUntil = now.AddMinutes(LongSilentMinutes); peer.SilentLogged = false; }
+            else if (peer.Failures == 2) { peer.SilentUntil = now.AddSeconds(silentSeconds); peer.SilentLogged = false; }
         }
     }
 

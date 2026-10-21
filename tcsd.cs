@@ -31,7 +31,7 @@ public sealed class tcsd
 #endif
 
 #if TCS_TESTING
-    public tcsd(string authorizedKeysPath, string hostPrivateKeyPath, string? dataDirectory = null, int pairSeconds = Tcs.PairingServer.DefaultSeconds)
+    public tcsd(string authorizedKeysPath, string hostPrivateKeyPath, string? dataDirectory = null, int pairSeconds = Tcs.PairingServer.DefaultSeconds, int pairSilentSeconds = 60)
 #else
     public tcsd()
 #endif
@@ -41,6 +41,7 @@ public sealed class tcsd
         var hostPrivateKeyPath = Tcs.Deployment.HostKey;
         string? dataDirectory = null;
         var pairSeconds = Tcs.PairingServer.DefaultSeconds;
+        var pairSilentSeconds = 60;
 #endif
         this.pairSeconds = pairSeconds;
         this.authorizedKeysPath = authorizedKeysPath;
@@ -54,7 +55,7 @@ public sealed class tcsd
         hostBlob = TcsCrypto.PublicBlob(hostPrivate);
         authorizedBlobs = File.Exists(authorizedKeysPath) ? TcsCrypto.ReadAuthorizedKeys(authorizedKeysPath) : [];   // may be empty: pairing creates it
         authorizedStamp = File.GetLastWriteTimeUtc(authorizedKeysPath);
-        pairing = new Tcs.PairingServer(hostBlob, AuthorizePairedKey, Audit, line => Console.Error.WriteLine("tcsd: " + line), pairSeconds);
+        pairing = new Tcs.PairingServer(hostBlob, AuthorizePairedKey, Audit, line => Console.Error.WriteLine("tcsd: " + line), pairSeconds, silentSeconds: pairSilentSeconds);
     }
 
     // Opens the one-time pairing window and tells the operator what to run on the controller.
@@ -118,7 +119,7 @@ public sealed class tcsd
         listener.Server.DualMode = true;
         listener.Start();
         Audit("daemon-start", Tcs.Pairing.Fingerprint(hostBlob), "OK", $"port={port} keys={authorizedBlobs.Count}");
-        Console.Error.WriteLine($"tcsd started: IPv4/IPv6 TCP {port}\nHost fingerprint: {Tcs.Pairing.Fingerprint(hostBlob)}\nAuthorized controller keys: {authorizedBlobs.Count}\nData folder: {Path.GetDirectoryName(auditPath)}\nPress P to open a one-minute pairing window, Ctrl+C to stop.");
+        Console.Error.WriteLine($"tcsd started: IPv4/IPv6 TCP {port}\nHost fingerprint: {Tcs.Pairing.Fingerprint(hostBlob)}\nAuthorized controller keys: {authorizedBlobs.Count}\nData folder: {Path.GetDirectoryName(auditPath)}\nPairing is off: it is only available after starting tcsd with 'tcsd pair'. Ctrl+C to stop.");
         if (OpenPairingOnStart)
         {
 #if TCS_TESTING
@@ -127,19 +128,6 @@ public sealed class tcsd
             OpenPairingWindow();
 #endif
         }
-        _ = Task.Run(async () =>
-        {
-            // P opens a pairing window in a running tcsd (only with an interactive console).
-            try
-            {
-                while (!cancellationToken.IsCancellationRequested)
-                {
-                    if (!Console.IsInputRedirected && Console.KeyAvailable && Console.ReadKey(true).Key == ConsoleKey.P) OpenPairingWindow();
-                    await Task.Delay(150, cancellationToken);
-                }
-            }
-            catch (Exception exception) when (exception is InvalidOperationException or OperationCanceledException or IOException) { }
-        });
         try
         {
             while (!cancellationToken.IsCancellationRequested)

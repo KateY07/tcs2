@@ -22,10 +22,10 @@ static void PrintHelp(bool daemon)
 TCS controlled PC: tcsd [options]
 
 PAIRING (first time, one minute, no files)
-  tcsd pair                        start tcsd with a one-minute pairing window and show a 6-digit code
-  (in a running tcsd press P)      open the window without restarting
+  tcsd pair  (or: tcsd --pair)     start tcsd and allow one-minute pairing: shows a 6-digit code
   Then run on the controller:      tcs pair <this-computer> <code>
-  Limits: 60 seconds, 3 attempts per window, single use; repeated failures from one address are blocked for 10 minutes.
+  Pairing is off unless tcsd is started this way; there is no other way to open it (restart tcsd to pair again).
+  Limits: 60 seconds, 3 attempts per window, single use; a second wrong code from one address makes tcsd ignore it silently for a minute, a third for ten minutes.
 
 PAIRING BY FILE (offline alternative)
   tcsd pairing import <file.tcs-pair>
@@ -78,10 +78,10 @@ OUTPUT AND EXIT CODES (exec)
   Only when something is abnormal one line "tcs: ..." is added to stderr.
   tcs's own errors (connection, identity, arguments, rejected authorization) exit 255.
   tcs pair exit codes: 0 paired, 10 not pairing, 11 bad code, 12 locked, 13 rate limited, 14 busy, 15 expired,
-  16 protocol error, 255 other.
+  16 protocol error, 18 no response (the controlled PC ignores this address), 255 other.
 
 EXAMPLES
-  tcs pair office-pc 481-937
+  tcs pair office-pc 481937
   tcs office-pc health
   tcs office-pc exec "print('hello')"
   tcs office-pc exec --file "test.py"
@@ -147,11 +147,12 @@ if (daemonMode && pairingArgs.FirstOrDefault() == "audit")
     PairCommand.ShowAudit(pairingArgs[1..]);
     return;
 }
-var pairMode = daemonMode && pairingArgs.FirstOrDefault() == "pair";
+// Pairing is never implicit: it exists only for a tcsd started with "tcsd pair" (or "tcsd --pair").
+var pairMode = daemonMode && (pairingArgs.FirstOrDefault() == "pair" || args.Contains("--pair"));
 if (pairMode)
 {
-    var pairAt = Array.IndexOf(args, "pair");
-    args = args.Where((_, index) => index != pairAt).ToArray();
+    var pairAt = pairingArgs.FirstOrDefault() == "pair" ? Array.IndexOf(args, "pair") : -1;
+    args = args.Where((argument, index) => index != pairAt && argument != "--pair").ToArray();
 }
 
 if (!daemonMode && args.Length == 0) throw new ArgumentException("The host address is missing.");

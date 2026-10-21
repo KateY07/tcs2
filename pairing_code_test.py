@@ -113,21 +113,41 @@ with tempfile.TemporaryDirectory(prefix="tcs-paircode-") as directory:
     assert "481937" not in (d.dir / "data" / "tcs-audit.log").read_text(encoding="utf-8"), "the code must never be logged"
     print("PASS audit trail: connections, denials with source and fingerprint, pairing events, script hash (never the code)")
 
-    # --- brute force: repeated wrong codes lock the window and block the address, even for the right code afterwards
-    d = Daemon(root, "brute", free_port(), "--pair", "--pair-code", "246810", "--pair-seconds", "30")
+    # --- brute force. 1st wrong code: forgiven as a typo. 2nd: the address is silently ignored for a while, even with the
+    # right code. After that period the right code works again (the window still has an attempt left).
+    d = Daemon(root, "brute", free_port(), "--pair", "--pair-code", "246810", "--pair-seconds", "40", "--pair-silent-seconds", "5")
     try:
-        results = []
+        first = d.pair("000001")
+        assert first.returncode == 11 and first.stdout.startswith("BAD_CODE"), first.stdout
+        time.sleep(2.3)
+        second = d.pair("000002")
+        assert second.returncode == 11, second.stdout
+        time.sleep(2.3)
+        silenced = d.pair("246810")
+        assert silenced.returncode == 18 and silenced.stdout.startswith("NO_RESPONSE"), (silenced.returncode, silenced.stdout)
+        assert not d.auth.exists() or d.auth.read_text() == "", "a silenced address must not be able to pair"
+        drops = [e for e in d.events() if e.get("event") == "pair-attempt" and e["result"] == "SILENT_DROP"]
+        assert len(drops) == 1, "the silent drop is logged once per penalty period"
+        time.sleep(3.2)
+        later = d.pair("246810")
+        assert later.returncode == 0 and later.stdout.startswith("PAIRED"), later.stdout
+        print("PASS silent penalty: a typo is forgiven, the second wrong code gets no reply at all for a while, then normal again")
+    finally:
+        d.stop()
+
+    # --- three wrong codes: window locked and the address ignored for ten minutes
+    d = Daemon(root, "lockout", free_port(), "--pair", "--pair-code", "369258", "--pair-seconds", "40", "--pair-silent-seconds", "1")
+    try:
         for guess in ("000001", "000002", "000003"):
-            results.append(d.pair(guess))
+            assert d.pair(guess).returncode == 11
             time.sleep(2.3)
-        assert all(r.returncode == 11 for r in results), [r.stdout for r in results]
-        late = d.pair("246810")
-        assert late.returncode in (12, 13) and late.stdout.split()[0] in ("LOCKED", "RATE_LIMITED"), late.stdout
+        late = d.pair("369258")
+        assert late.returncode == 18 and late.stdout.startswith("NO_RESPONSE"), late.stdout
         assert not d.auth.exists() or d.auth.read_text() == "", "the right code must not work after lockout"
+        closed = [e for e in d.events() if e.get("event") == "pair-window-close"]
+        assert closed and closed[-1]["result"] == "LOCKED", closed
         assert d.health().returncode != 0
-        locked = [e for e in d.events() if e.get("event") == "pair-window-close"]
-        assert locked and locked[-1]["result"] == "LOCKED", locked
-        print("PASS brute force: three wrong codes lock the window and the address; the right code is refused afterwards")
+        print("PASS lockout: three wrong codes lock the window and silence the address for ten minutes")
     finally:
         d.stop()
 

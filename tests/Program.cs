@@ -122,7 +122,7 @@ try
     if (args[0] == "--tcsd")
     {
         Environment.SetEnvironmentVariable("TCS_PYTHON_EXE", Option("--python", "python"));
-        var daemon = new tcsd(Option("--authorized-keys"), Option("--host-key"), Option("--data"), int.Parse(Option("--pair-seconds", "60")));
+        var daemon = new tcsd(Option("--authorized-keys"), Option("--host-key"), Option("--data"), int.Parse(Option("--pair-seconds", "60")), int.Parse(Option("--pair-silent-seconds", "60")));
         if (args.Contains("--pair")) { daemon.OpenPairingOnStart = true; daemon.FixedPairingCode = args.Contains("--pair-code") ? Option("--pair-code") : null; }
         await daemon.RunAsync(IPAddress.Any, int.Parse(Option("--port", "10122")));
         return;

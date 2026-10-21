@@ -172,8 +172,8 @@ footer a{text-decoration:none}footer a:hover{color:var(--ink)}
       <div class="step glass"><b>Make keys</b><span>One key pair per role, no passphrase.</span><code>ssh-keygen -t ed25519 -f ~\.ssh\id_ed25519</code></div>
       <div class="step glass"><b>Install</b><span>Run the installer on both PCs. It shows progress and checks your key first.</span><code>tcs-manual-*.exe</code></div>
       <div class="step glass"><b>Pair</b><span>Show a one-minute code on the controlled PC, type it on the controller.</span><code>tcsd pair
-tcs pair office-pc 481-937</code></div>
-      <div class="step glass"><b>Connect</b><span>Keep tcsd running (the installer can open the pairing window for you), then use tcs.</span><code>tcs office-pc health</code></div>
+tcs pair office-pc 481937</code></div>
+      <div class="step glass"><b>Connect</b><span>Keep tcsd running, then use tcs. Pairing is only open for a minute after tcsd pair.</span><code>tcs office-pc health</code></div>
     </div>
   </section>
 
@@ -181,21 +181,21 @@ tcs pair office-pc 481-937</code></div>
     <h2>Pair with a one-minute code</h2>
     <p class="sub">No files to move, no restart, no 43-character fingerprint to compare by eye. The controlled PC shows a short code; the controller types it. Both sides end up trusting each other.</p>
     <div class="two">
-      <pre><button class="copy" data-copy="tcs pair office-pc 481-937">copy</button><span class="c"># on the controlled PC (or press P in a running tcsd)</span>
+      <pre><button class="copy" data-copy="tcs pair office-pc 481937">copy</button><span class="c"># on the controlled PC: start tcsd with temporary pairing allowed</span>
 <span class="k">tcsd</span> pair
-<span class="c">tcsd: pairing code 481-937 (valid 60 s, 3 attempts, single use)</span>
+<span class="c">tcsd: pairing code 481937 (valid 60 s, 3 attempts, single use)</span>
 
 <span class="c"># on the controller</span>
-<span class="k">tcs</span> pair office-pc 481-937
+<span class="k">tcs</span> pair office-pc 481937
 <span class="c">Paired with office-pc:10122</span>
 <span class="c">Host fingerprint: SHA256:q3Zk...</span>
 <span class="c">This controller is authorized there. Try: tcs office-pc health</span></pre>
       <div class="tbl glass">
         <div><code>Authentication</code><span>SPAKE2 password-authenticated key exchange on P-256 (RFC 9382 construction). A wiretapper or man in the middle gets one online guess per session and nothing to crack offline.</span></div>
-        <div><code>Window</code><span>Opened only by an action on the controlled PC. 60 seconds, 3 attempts, single use; then it locks.</span></div>
-        <div><code>Rate limits</code><span>One attempt per 2 s per address, 10 minutes of blocking after 3 failures, one pairing at a time, a fixed slow-down on every failure.</span></div>
+        <div><code>Window</code><span>Opened only by starting tcsd with <b>tcsd pair</b> on the controlled PC; pairing is off otherwise. 60 seconds, 3 attempts, single use; then it locks.</span></div>
+        <div><code>Rate limits</code><span>One attempt per 2 s per address. The first wrong code is forgiven as a typo; the second makes tcsd ignore that address silently for a minute (no reply at all), the third for ten. One pairing at a time, a fixed slow-down on every failure.</span></div>
         <div><code>Result</code><span>The controller key is authorized at once (no restart); the host key is pinned on the controller.</span></div>
-        <div><code>Exit codes</code><span>0 paired, 10 not pairing, 11 bad code, 12 locked, 13 rate limited, 14 busy, 15 expired, 16 protocol error. Add --json for a structured result.</span></div>
+        <div><code>Exit codes</code><span>0 paired, 10 not pairing, 11 bad code, 12 locked, 13 rate limited, 14 busy, 15 expired, 16 protocol error, 18 no response (silently ignored). Add --json for a structured result.</span></div>
       </div>
     </div>
   </section>
@@ -262,7 +262,7 @@ tcs pair office-pc 481-937</code></div>
 
   // terminal preview
   var script=[
-    {c:'tcs pair office-pc 481-937', o:[['ok','Paired with office-pc:10122'],['dim','Host fingerprint: SHA256:q3Zk...']]},
+    {c:'tcs pair office-pc 481937', o:[['ok','Paired with office-pc:10122'],['dim','Host fingerprint: SHA256:q3Zk...']]},
     {c:'tcs office-pc health', o:[['ok','{"status":"ok"}']]},
     {c:'tcs office-pc exec "raise SystemExit(3)"', o:[['bad','tcs: exit=3']]},
     {c:'echo $LASTEXITCODE', o:[['','3']]}
