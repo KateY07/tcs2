@@ -251,7 +251,6 @@ tcs pair office-pc 481937</code></div>
     var r=rs&&rs[0]; if(!r||!r.assets)return;
     var a=r.assets.filter(function(x){return /^tcs-manual-.*\.exe$/.test(x.name)})[0];
     $('ver').textContent=r.tag_name;
-    $('download').href=r.html_url;$('navdl').href=r.html_url;   // the release page lists the installer, zip and checksum
     if(a){
       $('meta').textContent=a.name+' · '+(a.size/1048576).toFixed(1)+' MB · per-user install, no admin rights · Windows 10 / 11 · x64';}
   }).catch(function(){});
