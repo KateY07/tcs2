@@ -10,6 +10,7 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>true</SelfContained>
     <PublishAot>true</PublishAot>
+    <ApplicationIcon>assets\tcs.ico</ApplicationIcon>
     <NoWarn>$(NoWarn);CS8981</NoWarn>
   </PropertyGroup>
 
