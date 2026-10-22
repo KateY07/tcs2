@@ -16,9 +16,15 @@ catch (Exception exception)
     Environment.ExitCode = asDaemon ? 1 : CliOutput.Failure;
 }
 
+// On Linux the help shows Unix paths and python3.
+static string PlatformText(string text) => OperatingSystem.IsWindows() ? text : text
+    .Replace("%USERPROFILE%\\.ssh\\", "~/.ssh/").Replace(" and .ssh\\", " and ~/.ssh/").Replace("The old .ssh\\", "The old ~/.ssh/")
+    .Replace("%LOCALAPPDATA%\\TCS\\data", "~/.local/share/TCS/data").Replace("data\\tcs-audit.log", "data/tcs-audit.log")
+    .Replace("(default: python from PATH)", "(default: python3 from PATH)").Replace("upload .\\demo.txt", "upload ./demo.txt").Replace("Keep the window running.", "Keep it running (see tcsd.service for systemd).");
+
 static void PrintHelp(bool daemon)
 {
-    Console.WriteLine(daemon ? """
+    Console.WriteLine(PlatformText(daemon ? """
 TCS controlled PC: tcsd [options]
 
 PAIRING (first time, one minute, no files)
@@ -91,7 +97,7 @@ First connection: the host fingerprint is shown and must be confirmed; it is the
 Fixed locations: %USERPROFILE%\.ssh\id_ed25519 and .ssh\tcs_known_hosts.
 The public key is derived from the private key; a same-named id_ed25519.pub is not read, checked or modified.
 The old .ssh\tcs_host_key.pub is honoured with a warning. No key path can be set. exec runs Python on the controlled PC.
-""");
+"""));
 }
 
 static async Task RunAsync(string[] args)

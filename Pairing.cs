@@ -95,12 +95,12 @@ internal static class Pairing
         Console.Error.WriteLine($"Controller key to authorize: {fingerprint}\nAuthorized keys file: {authorizedKeys}");
         var already = File.Exists(authorizedKeys) && TcsCrypto.ReadAuthorizedKeys(authorizedKeys).Any(key => key.SequenceEqual(blob));
         if (!already || expected is not null) Confirm(fingerprint, expected);
-        Directory.CreateDirectory(Path.GetDirectoryName(hostKey)!);
+        Deployment.EnsureSshDirectory(Path.GetDirectoryName(hostKey)!);
         using (var keyLock = new FileStream(hostKey + ".tcs-lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
         {
             Deployment.ValidatePair(hostKey);
             var hostBlob = TcsCrypto.PublicBlob(TcsCrypto.ReadPrivateKey(hostKey));
-            Directory.CreateDirectory(Path.GetDirectoryName(authorizedKeys)!);
+            Deployment.EnsureSshDirectory(Path.GetDirectoryName(authorizedKeys)!);
             using var authLock = new FileStream(authorizedKeys + ".tcs-lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
             var existing = File.Exists(authorizedKeys) ? File.ReadAllText(authorizedKeys) : "";
             if (!File.Exists(authorizedKeys) || !TcsCrypto.ReadAuthorizedKeys(authorizedKeys).Any(key => key.SequenceEqual(blob)))

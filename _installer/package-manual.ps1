@@ -1,6 +1,6 @@
 ﻿param([string]$Version='2026.09.24.2')
 $ErrorActionPreference='Stop'
-if (-not $PSBoundParameters.ContainsKey('Version')) { $Version='2026.10.21.4' }
+if (-not $PSBoundParameters.ContainsKey('Version')) { $Version='2026.10.22.1' }
 if ($Version -notmatch '^[A-Za-z0-9._-]+$') { throw 'Invalid version' }
 $repo=Split-Path $PSScriptRoot -Parent
 $release="D:\pub\tcs\$Version.zip"
@@ -17,7 +17,7 @@ Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install-user.bat') -Destination
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'set-user-path.ps1') -Destination $payload
 $names=@(Get-ChildItem -LiteralPath $payload -Force | Select-Object -ExpandProperty Name)
 if ($names.Count -ne 5 -or @($names | Where-Object { $_ -notin @('tcs.exe','tcsd.exe','README.md','install.bat','set-user-path.ps1') }).Count) { throw 'Unexpected package contents' }
-$onesetup=Join-Path $repo '_package\onesetup.exe'   # onesetup v3.pre18 or newer (--ui, --icon)
+$onesetup=Join-Path $repo '_package\onesetup.exe'   # onesetup 4.0 or newer (--ui, --icon)
 if (-not (Test-Path -LiteralPath $onesetup)) { throw "onesetup.exe missing: $onesetup" }
 & $onesetup $payload -o $installer --ui --icon (Join-Path $repo 'assets\tcs.ico')   # TCS icon on the installer; tcs.exe/tcsd.exe carry it via ApplicationIcon
 if ($LASTEXITCODE) { throw 'OneSetup packaging failed' }

@@ -9,11 +9,35 @@ internal static class Deployment
     internal static string HostKey => Path.Combine(SshDirectory, "tcs_host_key");
     internal static string AuthorizedKeys => Path.Combine(SshDirectory, "authorized_keys");
     internal static string KnownHosts => Path.Combine(SshDirectory, "tcs_known_hosts");
-    internal static string Data => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "TCS", "data");
+    internal static string Data => Path.Combine(LocalData, "TCS", "data");
+
+    // %LOCALAPPDATA% on Windows; $XDG_DATA_HOME or ~/.local/share on Unix (GetFolderPath returns "" there when the folder does not exist yet).
+    static string LocalData
+    {
+        get
+        {
+            if (OperatingSystem.IsWindows()) return Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            if (Environment.GetEnvironmentVariable("XDG_DATA_HOME") is { Length: > 0 } xdg && Path.IsPathRooted(xdg)) return xdg;
+            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "share");
+        }
+    }
+
+    // Creates ~/.ssh (mode 700 on Unix) if it does not exist yet.
+    internal static void EnsureSshDirectory(string directory)
+    {
+        if (Directory.Exists(directory)) return;
+        if (OperatingSystem.IsWindows()) Directory.CreateDirectory(directory);
+        else Directory.CreateDirectory(directory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+    }
 
     internal static string KeyInstructions(bool server)
     {
         var name = server ? "tcs_host_key" : "id_ed25519";
+        if (!OperatingSystem.IsWindows()) return $"""
+If you have never created a private key, run this once, then install again. If you already have an identity, restore the original private key to the fixed location; do not regenerate it.
+
+mkdir -p -m 700 ~/.ssh && test ! -e ~/.ssh/{name} && ssh-keygen -t ed25519 -N "" -f ~/.ssh/{name}
+""";
         return $$"""
 If you have never created a private key, run the script below in PowerShell, then install again. If you already have an identity, restore the original private key to the fixed location; do not regenerate it. Press Enter twice at the passphrase prompts.
 If ssh-keygen is missing, install the Windows optional feature "OpenSSH Client" (the OpenSSH server is not needed).

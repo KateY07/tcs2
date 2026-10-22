@@ -71,7 +71,7 @@ if ((Test-Path -LiteralPath $tcsKey) -or (Test-Path -LiteralPath ($tcsKey + '.pu
 
 ## 3. 安装（无需管理员权限）
 
-从 [GitHub Releases](https://github.com/KateY07/tcs2/releases) 获取发布包；当前版本安装包为 tcs-manual-2026.10.21.4.exe。两端分别双击安装程序，会出现安装窗口，回答“这台是否为主控端”（是 = 主控端，否 = 被控端）。回答决定检查哪个私钥，同一安装包包含两个程序。无人值守时可预设环境变量 `TCS_ROLE=controller` 或 `server` 跳过提问。
+从 [GitHub Releases](https://github.com/KateY07/tcs2/releases) 获取发布包；当前版本安装包为 tcs-manual-2026.10.22.1.exe。两端分别双击安装程序，会出现安装窗口，回答“这台是否为主控端”（是 = 主控端，否 = 被控端）。回答决定检查哪个私钥，同一安装包包含两个程序。无人值守时可预设环境变量 `TCS_ROLE=controller` 或 `server` 跳过提问。
 
 安装程序只检查固定位置的私钥是否可读取、格式及签名是否可用，公钥和指纹直接从私钥推导。私钥缺失、损坏或带口令时停止（窗口显示失败并展开详情），详情中有错误和供全新用户复制的生成脚本；已有身份应恢复原私钥。不会继续复制程序或修改用户 Path，也不会自动执行生成命令。不要求同名 .pub 存在。
 
@@ -255,3 +255,20 @@ tcs server exec --file "test.py"
 配对码本身永远不会写入日志。查看最近记录：`tcsd audit --tail 20`。
 
 所有程序提示（错误、帮助、状态）统一为英文，便于脚本和大模型解析；README 仍为中文。
+
+## Linux
+
+Releases 里的 `tcs-<版本>-linux-x64.tar.gz` 是 Linux x86_64 的二进制包（不是安装程序，不需要 .NET 运行时）：`tcs`（主控端）、`tcsd`（被控端，与 tcs 是同一程序）、`tcsd.service`（systemd 用户服务示例）和 `README-linux.txt`。
+
+```bash
+tar xzf tcs-*-linux-x64.tar.gz && install -m 755 tcs-*/tcs tcs-*/tcsd ~/.local/bin/
+mkdir -p -m 700 ~/.ssh && ssh-keygen -t ed25519 -N "" -f ~/.ssh/tcs_host_key   # 被控端；主控端用 id_ed25519
+tcsd pair                                  # 被控端：显示 6 位配对码
+tcs pair <被控端> <配对码>                  # 主控端
+tcs <被控端> exec "print('hello')"
+```
+
+- 位置：`~/.ssh/id_ed25519`、`~/.ssh/tcs_host_key`、`~/.ssh/authorized_keys`、`~/.ssh/tcs_known_hosts`；数据与审计日志在 `~/.local/share/TCS/data`（或 `$XDG_DATA_HOME/TCS/data`）。
+- `exec` 默认调用 `python3`（`--python` 或 `TCS_PYTHON_EXE` 可改）；`--service` 是 Windows 服务模式，Linux 请用 systemd（见 `tcsd.service`）。
+- 在 Ubuntu 24.04（glibc 2.39）上用 NativeAOT 构建，需要 glibc 2.39 或更新；NativeAOT 不能从 Windows 交叉编译，构建脚本是 `_linux/package-linux.sh`（需要 .NET 10 SDK、clang、zlib1g-dev）。
+- Linux 与 Windows 版使用同一协议，可以互相控制；跨系统配对未在真实两台机器上测试，Linux 端的配对、exec、上传、审计在本机虚拟机内实测通过。

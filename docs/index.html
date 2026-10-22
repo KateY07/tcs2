@@ -129,14 +129,14 @@ footer a{text-decoration:none}footer a:hover{color:var(--ink)}
 <main class="wrap" id="top">
   <div class="hero">
     <div>
-      <span class="eyebrow glass"><i></i><span id="ver">v2026.10.20.2</span> · Windows · x64</span>
+      <span class="eyebrow glass"><i></i><span id="ver">v2026.10.20.2</span> · Windows · Linux · x64</span>
       <h1><span>Run things</span><br>on another PC.</h1>
-      <p class="lead">TCS is a tiny encrypted remote-control pair for Windows: <b>tcs</b> on your machine, <b>tcsd</b> on the other. No sshd, no .NET runtime, no accounts. Just Ed25519 keys, a fingerprint you confirm once, and one command.</p>
+      <p class="lead">TCS is a tiny encrypted remote-control pair for Windows and Linux: <b>tcs</b> on your machine, <b>tcsd</b> on the other. No sshd, no .NET runtime, no accounts. Just Ed25519 keys, a fingerprint you confirm once, and one command.</p>
       <div class="cta">
         <a class="btn primary" id="download" href="https://github.com/KateY07/tcs2/releases"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="M7 11l5 5 5-5"/><path d="M5 20h14"/></svg>Download</a>
         <a class="btn" href="https://github.com/KateY07/tcs2">View on GitHub</a>
       </div>
-      <p class="meta" id="meta">Windows 10 / 11 · x64 · per-user install, no admin rights · TCP 10122, IPv4 and IPv6</p>
+      <p class="meta" id="meta">Windows 10 / 11 · x64 · per-user install, no admin rights · TCP 10122, IPv4 and IPv6<br>Linux x86_64: plain binaries in a .tar.gz on the Releases page (tcs + tcsd, systemd unit included)</p>
     </div>
     <div class="stage" role="img" aria-label="Terminal session running tcs commands">
       <div class="term"><div class="top"><i></i><i></i><i></i><span>PowerShell · tcs</span></div><div class="body" id="body"></div></div>
@@ -252,7 +252,7 @@ tcs pair office-pc 481937</code></div>
     var a=r.assets.filter(function(x){return /^tcs-manual-.*\.exe$/.test(x.name)})[0];
     $('ver').textContent=r.tag_name;
     if(a){
-      $('meta').textContent=a.name+' · '+(a.size/1048576).toFixed(1)+' MB · per-user install, no admin rights · Windows 10 / 11 · x64';}
+      $('meta').innerHTML=a.name+' · '+(a.size/1048576).toFixed(1)+' MB · per-user install, no admin rights · Windows 10 / 11 · x64<br>Linux x86_64: plain binaries in a .tar.gz on the Releases page';}
   }).catch(function(){});
 
   [].forEach.call(document.querySelectorAll('.copy'),function(b){b.onclick=function(){

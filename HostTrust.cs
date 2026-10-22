@@ -35,7 +35,7 @@ internal static class HostTrust
                 throw new CryptographicException("This host is already pinned to a different identity; pairing will not overwrite it. If the controlled PC was reinstalled, remove its saved trust record first.");
             return;
         }
-        Directory.CreateDirectory(directory);
+        Deployment.EnsureSshDirectory(directory);
         Pairing.AtomicWrite(path, Pairing.PublicLine(blob) + "\n", false);
     }
 
@@ -78,7 +78,7 @@ internal static class HostTrust
         var fingerprint = Pairing.Fingerprint(blob);
         Console.Error.WriteLine($"First connection to controlled PC [{host}]:{port}\nHost fingerprint: {fingerprint}");
         Pairing.Confirm(fingerprint, expected);
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        Deployment.EnsureSshDirectory(Path.GetDirectoryName(path)!);
         try { Pairing.AtomicWrite(path, Pairing.PublicLine(blob) + "\n", false); }
         catch (IOException) when (File.Exists(path))
         {

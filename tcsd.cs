@@ -100,7 +100,7 @@ public sealed class tcsd
         {
             ReloadAuthorizedIfChanged();
             if (authorizedBlobs.Any(known => known.SequenceEqual(blob))) return true;
-            Directory.CreateDirectory(Path.GetDirectoryName(authorizedKeysPath)!);
+            Tcs.Deployment.EnsureSshDirectory(Path.GetDirectoryName(authorizedKeysPath)!);
             using var fileLock = new FileStream(authorizedKeysPath + ".tcs-lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
             var existing = File.Exists(authorizedKeysPath) ? File.ReadAllText(authorizedKeysPath) : "";
             Tcs.Pairing.AtomicWrite(authorizedKeysPath, existing + (existing.Length > 0 && !existing.EndsWith('\n') ? "\n" : "") + Tcs.Pairing.PublicLine(blob) + "\n", true);
@@ -392,7 +392,7 @@ public sealed class tcsd
         var elapsed = Stopwatch.StartNew();
         var startInfo = new ProcessStartInfo
         {
-            FileName = Environment.GetEnvironmentVariable("TCS_PYTHON_EXE") is { Length: > 0 } configured ? configured : "python",
+            FileName = Environment.GetEnvironmentVariable("TCS_PYTHON_EXE") is { Length: > 0 } configured ? configured : OperatingSystem.IsWindows() ? "python" : "python3",
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,

@@ -1,0 +1,17 @@
+# systemd user unit for the TCS controlled PC (Linux).
+#   mkdir -p ~/.config/systemd/user && cp tcsd.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now tcsd
+#   loginctl enable-linger $USER      # keep it running when you are logged out
+# Pairing is never opened by the service: stop it, run "tcsd pair" in a terminal, pair, then start the service again.
+[Unit]
+Description=TCS controlled PC daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=%h/.local/bin/tcsd --port 10122
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

@@ -7,10 +7,11 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <AssemblyName>tcs</AssemblyName>
     <RootNamespace>Tcs</RootNamespace>
-    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)'=='' and $([MSBuild]::IsOSPlatform('Windows'))">win-x64</RuntimeIdentifier>
+    <!-- Linux: build on Linux (NativeAOT cannot cross-compile) with  dotnet publish -c Release -r linux-x64 -->
     <SelfContained>true</SelfContained>
     <PublishAot>true</PublishAot>
-    <ApplicationIcon>assets\tcs.ico</ApplicationIcon>
+    <ApplicationIcon Condition="$([MSBuild]::IsOSPlatform('Windows'))">assets\tcs.ico</ApplicationIcon>
     <NoWarn>$(NoWarn);CS8981</NoWarn>
   </PropertyGroup>
 

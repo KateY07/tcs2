@@ -6,7 +6,7 @@ internal sealed class DaemonService(int port) : BackgroundService
 {
     internal static async Task RunAsync(string name, int port)
     {
-        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("Windows service mode requires Windows");
+        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("--service is Windows-only. On Linux run tcsd in the foreground or under systemd (see tcsd.service in the package).");
         var data = Deployment.Data;
         Directory.CreateDirectory(data);
         using var log = new StreamWriter(Path.Combine(data, "service.log"), append: true) { AutoFlush = true };
