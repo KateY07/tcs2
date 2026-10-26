@@ -147,7 +147,7 @@ public sealed class tcsd
 #if !TCS_TESTING
         if (RequireWatermark && OperatingSystem.IsWindows())
         {
-            watermark = new Tcs.WatermarkOverlay(Tcs.Pairing.Fingerprint(hostBlob));
+            watermark = new Tcs.WatermarkOverlay(Tcs.Pairing.Fingerprint(hostBlob), auditPath);
             watermark.Start();
             watermark.Push($"tcsd started on TCP {port} — visible activity watermark");
             if (!watermark.IsHealthy)
