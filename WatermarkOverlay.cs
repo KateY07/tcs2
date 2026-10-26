@@ -17,8 +17,8 @@ internal sealed class WatermarkOverlay
 {
     const string ClassName = "TcsWatermarkOverlay";
     const string Title = "● TCS remote control";
-    const int Width = 300, Height = 60, MaxLines = 2, MarginRight = 26;
-    const double TextOpacity = 0.72, ShadowOpacity = 0.55;   // kept low on purpose: visible, not loud
+    const int Width = 256, Height = 50, MaxLines = 2, MarginRight = 24;
+    const double TextOpacity = 0.78, ShadowOpacity = 0.5;   // kept low on purpose: visible, not loud
     const uint WS_POPUP = 0x80000000;
     const uint WS_EX_LAYERED = 0x00080000, WS_EX_TRANSPARENT = 0x00000020, WS_EX_TOPMOST = 0x00000008,
                WS_EX_TOOLWINDOW = 0x00000080, WS_EX_NOACTIVATE = 0x08000000;
@@ -203,15 +203,15 @@ internal sealed class WatermarkOverlay
         // 1. draw all text opaque white on a black (zeroed) DIB; the grey level is the text coverage.
         SetBkMode(memDC, 1);   // TRANSPARENT
         SetTextColor(memDC, 0x00FFFFFF);
-        var titleFont = CreateFontW(-12, 0, 0, 0, 600, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI");
-        var bodyFont = CreateFontW(-11, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI");
+        var titleFont = CreateFontW(-11, 0, 0, 0, 500, 0, 0, 0, 1, 0, 0, 4, 0, "Segoe UI");   // 4 = ANTIALIASED (grayscale; ClearType would leave colour fringes)
+        var bodyFont = CreateFontW(-10, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 4, 0, "Segoe UI");
         var old = SelectObject(memDC, titleFont);
-        DrawLine(memDC, Title, 8, 4, Width - 12, 16);
+        DrawLine(memDC, Title, 7, 4, Width - 10, 14);
         SelectObject(memDC, bodyFont);
         string[] snapshot;
         lock (gate) snapshot = lines.Count == 0 ? new[] { "waiting for commands…" } : lines.ToArray();
-        var y = 22;
-        foreach (var text in snapshot) { DrawLine(memDC, text, 8, y, Width - 10, 14); y += 15; }
+        var y = 20;
+        foreach (var text in snapshot) { DrawLine(memDC, text, 7, y, Width - 9, 13); y += 13; }
         SelectObject(memDC, old);
         DeleteObject(titleFont);
         DeleteObject(bodyFont);
@@ -228,12 +228,13 @@ internal sealed class WatermarkOverlay
         {
             for (var xx = 0; xx < Width; xx++, p++)
             {
-                byte sc = 0;
-                foreach (var (dx, dy) in Shadow)
+                double scAcc = 0;
+                foreach (var (dx, dy, w) in Shadow)
                 {
                     int sx = xx - dx, sy = yy - dy;
-                    if (sx >= 0 && sy >= 0) sc = Math.Max(sc, cov[sy * Width + sx]);
+                    if (sx >= 0 && sx < Width && sy >= 0 && sy < Height) scAcc = Math.Max(scAcc, w * cov[sy * Width + sx]);
                 }
+                var sc = (byte)scAcc;
                 var tA = cov[p] / 255.0 * TextOpacity;
                 var sA = sc / 255.0 * ShadowOpacity;
                 var a = tA + sA * (1 - tA);
@@ -259,7 +260,9 @@ internal sealed class WatermarkOverlay
         ReleaseDC(IntPtr.Zero, screenDC);
     }
 
-    static readonly (int dx, int dy)[] Shadow = { (1, 1), (2, 2), (1, 2), (2, 1) };
+    // A soft drop shadow to the lower-right that fades with distance: enough to lift white text off a light
+    // background, without the heavy outlined look an all-around halo gives at this small size.
+    static readonly (int dx, int dy, double w)[] Shadow = { (1, 1, 1.0), (2, 2, 0.55), (1, 2, 0.55), (2, 1, 0.55), (2, 3, 0.25), (3, 2, 0.25) };
 
     void DrawLine(IntPtr hdc, string text, int x, int y, int w, int hgt)
     {
