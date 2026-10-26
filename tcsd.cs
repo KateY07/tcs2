@@ -148,8 +148,7 @@ public sealed class tcsd
         if (RequireWatermark && OperatingSystem.IsWindows())
         {
             watermark = new Tcs.WatermarkOverlay(Tcs.Pairing.Fingerprint(hostBlob), auditPath);
-            watermark.Start();
-            watermark.Push($"tcsd started on TCP {port} — visible activity watermark");
+            watermark.Start();   // shows "TCS: READY" until the first command
             if (!watermark.IsHealthy)
                 Console.Error.WriteLine("tcsd: the activity watermark could not be shown (no interactive desktop?). exec and upload will be refused until it is visible.");
         }
@@ -343,8 +342,8 @@ public sealed class tcsd
         if (WatermarkGuard("exec", fingerprint) is { } refused) return refused;
 #if !TCS_TESTING
         var firstLine = request.Script.Split('\n', 2)[0].Trim();
-        if (firstLine.Length > 60) firstLine = firstLine[..60] + "…";
-        watermark?.Push($"exec  {CurrentSource.Value}  {fingerprint[..Math.Min(20, fingerprint.Length)]}  {firstLine}");
+        if (firstLine.Length > 40) firstLine = firstLine[..40] + "…";
+        watermark?.Push($"Exec '{firstLine}'");
 #endif
         var scriptPath = Path.Combine(Path.GetTempPath(), "tcs", $"{Guid.NewGuid():N}.py");
         Directory.CreateDirectory(Path.GetDirectoryName(scriptPath)!);
@@ -359,7 +358,8 @@ public sealed class tcsd
                 new TcsExecAudit(DateTimeOffset.UtcNow, "/v1/exec", fingerprint, started.ElapsedMilliseconds, result.ExitCode, result.TimedOut, CurrentSource.Value, Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(request.Script))).ToLowerInvariant()),
                 TcsJsonContext.Default.TcsExecAudit));
 #if !TCS_TESTING
-            watermark?.Push($"  ↳ {(result.TimedOut ? "timeout" : "exit=" + result.ExitCode)}  ({started.ElapsedMilliseconds} ms)");
+            if (result.TimedOut) watermark?.Push($"Exec '{firstLine}' timeout");
+            else if (result.ExitCode is not 0) watermark?.Push($"Exec '{firstLine}' exit={result.ExitCode}");
 #endif
             return HttpResponse(200, "application/json", JsonSerializer.Serialize(result, TcsJsonContext.Default.ExecResult));
         }
@@ -409,7 +409,7 @@ public sealed class tcsd
             new TcsUploadAudit(DateTimeOffset.UtcNow, "/v1/upload", fingerprint, new[] { stored }, CurrentSource.Value),
             TcsJsonContext.Default.TcsUploadAudit));
 #if !TCS_TESTING
-        watermark?.Push($"upload  {CurrentSource.Value}  {fingerprint[..Math.Min(20, fingerprint.Length)]}  {filename}");
+        watermark?.Push($"Upload '{filename}'");
 #endif
         return HttpResponse(200, "application/json", JsonSerializer.Serialize(
             new UploadResponse(new[] { stored }), TcsJsonContext.Default.UploadResponse));

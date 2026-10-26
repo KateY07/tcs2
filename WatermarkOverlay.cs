@@ -3,22 +3,20 @@ using System.Runtime.Versioning;
 
 namespace Tcs;
 
-// An unobtrusive but always-present proof that this PC can be driven remotely, shown on its own desktop: small
-// white text with a soft shadow, transparent background, parked at the right edge, vertically centred. It shows
-// the few most recent commands; full detail (the audit log) and Exit are on the tray icon. It exists so the
-// "service" form of tcsd is never covert: when this badge is not healthy (no interactive desktop, window hidden,
-// or its UI thread stuck) exec/upload are refused.
+// A single-line, always-present badge on this PC's own desktop: a blinking red marker plus "TCS: READY" when
+// idle or "TCS: Exec '...'" while a command runs. Small white text with a soft shadow, transparent background,
+// parked at the right edge and vertically centred. Full detail (the audit log) and Exit live on the tray icon.
+// It exists so the "service" form of tcsd is never covert: when the badge is not healthy (no interactive desktop,
+// window hidden, or its UI thread stuck) exec/upload are refused.
 //
-// The badge cannot be made truly unkillable - any process can be ended - so the design is "fail visible, fail
-// closed": it re-asserts topmost/visible every second, is click-through (WS_EX_TRANSPARENT), and the daemon
-// refuses to act the moment it stops being healthy. Per-pixel alpha (UpdateLayeredWindow) keeps it faint.
+// Fail visible, fail closed: it re-asserts topmost/visible every tick, is click-through (WS_EX_TRANSPARENT), and
+// the daemon refuses to act the moment it stops being healthy. DPI-aware and per-pixel alpha, so it stays crisp.
 [SupportedOSPlatform("windows")]
 internal sealed class WatermarkOverlay
 {
     const string ClassName = "TcsWatermarkOverlay";
-    const string Title = "● TCS remote control";
-    const int Width = 256, Height = 50, MaxLines = 2, MarginRight = 24;
-    const double TextOpacity = 1.0, ShadowOpacity = 0.6;   // fully opaque text; the glyphs are thin, so it stays unobtrusive
+    const int Width = 300, Height = 30, MarginRight = 22;   // logical (96-dpi) design units; scaled by the display DPI
+    const double TextOpacity = 1.0, ShadowOpacity = 0.72;   // fully opaque text; a wide soft shadow lifts it off any background
     const uint WS_POPUP = 0x80000000;
     const uint WS_EX_LAYERED = 0x00080000, WS_EX_TRANSPARENT = 0x00000020, WS_EX_TOPMOST = 0x00000008,
                WS_EX_TOOLWINDOW = 0x00000080, WS_EX_NOACTIVATE = 0x08000000;
@@ -36,11 +34,15 @@ internal sealed class WatermarkOverlay
     readonly object gate = new();
     readonly string header;      // host fingerprint, shown in the tray tooltip/menu
     readonly string auditPath;
-    readonly LinkedList<string> lines = new();
     volatile IntPtr hwnd;         // the layered badge
     IntPtr trayHwnd;              // hidden sink for the tray icon + menu
     volatile bool running;
     DateTime lastTick = DateTime.MinValue;
+    DateTime lastActivity = DateTime.MinValue;   // drives the blinking marker and the READY/busy text
+    string? lastAction;
+    double scale = 1.0;
+    int sW = Width, sH = Height;
+    (int dx, int dy, double w)[] shadow = Array.Empty<(int, int, double)>();
     WndProc? wndProcKeepAlive;
     Thread? thread;
     NOTIFYICONDATAW nid;
@@ -71,12 +73,13 @@ internal sealed class WatermarkOverlay
         }
     }
 
-    internal void Push(string line)
+    // Short status shown on the badge, e.g. "Exec 'print(1)'" or "Upload 'x.txt'". Reverts to READY after ~5 s.
+    internal void Push(string status)
     {
         lock (gate)
         {
-            lines.AddFirst($"{DateTimeOffset.Now:HH:mm:ss}  {line}");
-            while (lines.Count > MaxLines) lines.RemoveLast();
+            lastAction = status;
+            lastActivity = DateTime.UtcNow;
         }
         var h = hwnd;
         if (h != IntPtr.Zero) InvalidateRect(h, IntPtr.Zero, false);   // InvalidateRect is safe to call across threads
@@ -84,6 +87,14 @@ internal sealed class WatermarkOverlay
 
     void ThreadMain()
     {
+        try { SetProcessDpiAwarenessContext(new IntPtr(-4)); } catch { /* older OS: fall back to DPI-virtualised */ }
+        uint dpi = 0;
+        try { dpi = GetDpiForSystem(); } catch { /* ignore */ }
+        scale = dpi >= 72 ? dpi / 96.0 : 1.0;
+        sW = (int)Math.Round(Width * scale);
+        sH = (int)Math.Round(Height * scale);
+        shadow = BuildShadow((int)Math.Round(3 * scale));
+
         wndProcKeepAlive = WindowProc;
         var module = GetModuleHandleW(null);
         var wc = new WNDCLASSEXW
@@ -99,13 +110,13 @@ internal sealed class WatermarkOverlay
         var created = CreateWindowExW(
             WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
             ClassName, "TCS remote control", WS_POPUP,
-            0, 0, Width, Height, IntPtr.Zero, IntPtr.Zero, module, IntPtr.Zero);
+            0, 0, sW, sH, IntPtr.Zero, IntPtr.Zero, module, IntPtr.Zero);
         if (created == IntPtr.Zero) { running = false; return; }
         hwnd = created;
         RenderAndUpdate(created);
         ShowWindow(created, SW_SHOWNA);
         SetWindowPos(created, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-        SetTimer(created, 1, 1000, IntPtr.Zero);
+        SetTimer(created, 1, 450, IntPtr.Zero);   // fast enough for the marker to blink
 
         trayHwnd = CreateWindowExW(0, ClassName, "TCS tray", WS_POPUP, 0, 0, 0, 0, IntPtr.Zero, IntPtr.Zero, module, IntPtr.Zero);
         AddTrayIcon(module);
@@ -185,71 +196,86 @@ internal sealed class WatermarkOverlay
         }
     }
 
-    // Renders the badge into a 32-bpp premultiplied DIB (white text + soft shadow, transparent elsewhere) and
-    // blends it onto the screen with per-pixel alpha. Positioned at the right edge, vertically centred.
+    // Renders the one-line badge into a 32-bpp premultiplied DIB (white text + soft shadow + a red marker,
+    // transparent elsewhere) and blends it onto the screen with per-pixel alpha, right edge, vertically centred.
     void RenderAndUpdate(IntPtr h)
     {
+        int Sc(double v) => (int)Math.Round(v * scale);
         var screenDC = GetDC(IntPtr.Zero);
         var memDC = CreateCompatibleDC(screenDC);
         var bmi = new BITMAPINFOHEADER
         {
             biSize = (uint)Marshal.SizeOf<BITMAPINFOHEADER>(),
-            biWidth = Width, biHeight = -Height, biPlanes = 1, biBitCount = 32, biCompression = 0,
+            biWidth = sW, biHeight = -sH, biPlanes = 1, biBitCount = 32, biCompression = 0,
         };
         var dib = CreateDIBSection(memDC, ref bmi, 0, out var bits, IntPtr.Zero, 0);
         if (dib == IntPtr.Zero) { DeleteDC(memDC); ReleaseDC(IntPtr.Zero, screenDC); return; }
         var oldBmp = SelectObject(memDC, dib);
 
-        // 1. draw all text opaque white on a black (zeroed) DIB; the grey level is the text coverage.
+        // current text: "TCS: READY" when idle, "TCS: <action>" for ~5 s after a command.
+        DateTime la; string? action;
+        lock (gate) { la = lastActivity; action = lastAction; }
+        var active = DateTime.UtcNow - la < TimeSpan.FromSeconds(5);
+        var text = "TCS: " + (active && !string.IsNullOrEmpty(action) ? action : "READY");
+
+        // 1. draw the text opaque white on the zeroed DIB; the grey level is the text coverage.
         SetBkMode(memDC, 1);   // TRANSPARENT
         SetTextColor(memDC, 0x00FFFFFF);
-        var titleFont = CreateFontW(-11, 0, 0, 0, 500, 0, 0, 0, 1, 0, 0, 4, 0, "Segoe UI");   // 4 = ANTIALIASED (grayscale; ClearType would leave colour fringes)
-        var bodyFont = CreateFontW(-10, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 4, 0, "Segoe UI");
-        var old = SelectObject(memDC, titleFont);
-        DrawLine(memDC, Title, 7, 4, Width - 10, 14);
-        SelectObject(memDC, bodyFont);
-        string[] snapshot;
-        lock (gate) snapshot = lines.Count == 0 ? new[] { "waiting for commands…" } : lines.ToArray();
-        var y = 20;
-        foreach (var text in snapshot) { DrawLine(memDC, text, 7, y, Width - 9, 13); y += 13; }
+        var font = CreateFontW(-Sc(13.5), 0, 0, 0, 500, 0, 0, 0, 1, 0, 0, 4, 0, "Segoe UI");   // 4 = ANTIALIASED (grayscale)
+        var old = SelectObject(memDC, font);
+        var r = new RECT { left = Sc(20), top = 0, right = sW - Sc(4), bottom = sH };
+        DrawTextW(memDC, text, text.Length, ref r, 0x20 | 0x4 | 0x0800 | 0x8000);   // SINGLELINE|VCENTER|NOPREFIX|END_ELLIPSIS
         SelectObject(memDC, old);
-        DeleteObject(titleFont);
-        DeleteObject(bodyFont);
+        DeleteObject(font);
 
         // 2. coverage = luminance of the white render.
-        var raw = new byte[Width * Height * 4];
+        var raw = new byte[sW * sH * 4];
         Marshal.Copy(bits, raw, 0, raw.Length);
-        var cov = new byte[Width * Height];
+        var cov = new byte[sW * sH];
         for (int i = 0, p = 0; p < cov.Length; i += 4, p++)
             cov[p] = Math.Max(raw[i], Math.Max(raw[i + 1], raw[i + 2]));
 
-        // 3. white text premultiplied over a black shadow offset down-right; everything else stays transparent.
-        for (int yy = 0, p = 0; yy < Height; yy++)
-        {
-            for (var xx = 0; xx < Width; xx++, p++)
+        // 3. white text premultiplied over a wide soft shadow; everything else stays transparent.
+        for (int yy = 0, p = 0; yy < sH; yy++)
+            for (var xx = 0; xx < sW; xx++, p++)
             {
                 double scAcc = 0;
-                foreach (var (dx, dy, w) in Shadow)
+                foreach (var (dx, dy, w) in shadow)
                 {
                     int sx = xx - dx, sy = yy - dy;
-                    if (sx >= 0 && sx < Width && sy >= 0 && sy < Height) scAcc = Math.Max(scAcc, w * cov[sy * Width + sx]);
+                    if (sx >= 0 && sx < sW && sy >= 0 && sy < sH) scAcc = Math.Max(scAcc, w * cov[sy * sW + sx]);
                 }
-                var sc = (byte)scAcc;
                 var tA = cov[p] / 255.0 * TextOpacity;
-                var sA = sc / 255.0 * ShadowOpacity;
+                var sA = scAcc / 255.0 * ShadowOpacity;
                 var a = tA + sA * (1 - tA);
                 var c = (byte)(255 * tA);
                 var o = p * 4;
                 raw[o] = raw[o + 1] = raw[o + 2] = c;   // premultiplied white
                 raw[o + 3] = (byte)(255 * a);
             }
+
+        // 3b. a red "*" marker at the left: blinks for ~5 s after each command, otherwise glows steadily.
+        if (!active || (Environment.TickCount64 / 450) % 2 == 0)
+        {
+            double dcx = Sc(9), dcy = sH / 2.0, dr = Sc(3.6);
+            for (var yy = (int)(dcy - dr - 1); yy <= (int)(dcy + dr + 1); yy++)
+                for (var xx = (int)(dcx - dr - 1); xx <= (int)(dcx + dr + 1); xx++)
+                {
+                    if (xx < 0 || yy < 0 || xx >= sW || yy >= sH) continue;
+                    var d = Math.Sqrt((xx - dcx) * (xx - dcx) + (yy - dcy) * (yy - dcy));
+                    var covd = Math.Clamp(dr + 0.5 - d, 0, 1);
+                    if (covd <= 0) continue;
+                    var o = (yy * sW + xx) * 4;
+                    var av = (byte)(255 * covd);
+                    raw[o] = 0; raw[o + 1] = 0; raw[o + 2] = av; raw[o + 3] = av;   // premultiplied red
+                }
         }
         Marshal.Copy(raw, 0, bits, raw.Length);
 
         // 4. blend onto the screen at the right edge, vertically centred on the virtual desktop.
         int vx = GetSystemMetrics(76), vy = GetSystemMetrics(77), vw = GetSystemMetrics(78), vh = GetSystemMetrics(79);
-        var dst = new POINT { x = vx + vw - Width - MarginRight, y = vy + (vh - Height) / 2 };
-        var size = new SIZE { cx = Width, cy = Height };
+        var dst = new POINT { x = vx + vw - sW - Sc(MarginRight), y = vy + (vh - sH) / 2 };
+        var size = new SIZE { cx = sW, cy = sH };
         var src = new POINT { x = 0, y = 0 };
         var blend = new BLENDFUNCTION { BlendOp = AC_SRC_OVER, BlendFlags = 0, SourceConstantAlpha = 255, AlphaFormat = AC_SRC_ALPHA };
         UpdateLayeredWindow(h, screenDC, ref dst, ref size, memDC, ref src, 0, ref blend, ULW_ALPHA);
@@ -260,14 +286,19 @@ internal sealed class WatermarkOverlay
         ReleaseDC(IntPtr.Zero, screenDC);
     }
 
-    // A soft drop shadow to the lower-right that fades with distance: enough to lift white text off a light
-    // background, without the heavy outlined look an all-around halo gives at this small size.
-    static readonly (int dx, int dy, double w)[] Shadow = { (1, 1, 1.0), (2, 2, 0.55), (1, 2, 0.55), (2, 1, 0.55), (2, 3, 0.25), (3, 2, 0.25) };
-
-    void DrawLine(IntPtr hdc, string text, int x, int y, int w, int hgt)
+    static (int, int, double)[] BuildShadow(int radius)
     {
-        var r = new RECT { left = x, top = y, right = x + w, bottom = y + hgt };
-        DrawTextW(hdc, text, text.Length, ref r, 0x20 | 0x0800 | 0x8000);   // SINGLELINE|NOPREFIX|END_ELLIPSIS
+        if (radius < 1) radius = 1;
+        var kernel = new List<(int, int, double)>();
+        for (var dy = -radius; dy <= radius; dy++)
+            for (var dx = -radius; dx <= radius; dx++)
+            {
+                if (dx == 0 && dy == 0) continue;
+                var d = Math.Sqrt(dx * dx + dy * dy);
+                if (d > radius + 0.5) continue;
+                kernel.Add((dx, dy, Math.Max(0, 1 - d / (radius + 1.0))));
+            }
+        return kernel.ToArray();
     }
 
     delegate IntPtr WndProc(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
@@ -344,6 +375,8 @@ internal sealed class WatermarkOverlay
     [DllImport("user32")] static extern bool DestroyMenu(IntPtr menu);
     [DllImport("user32")] static extern bool GetCursorPos(out POINT p);
     [DllImport("user32")] static extern bool SetForegroundWindow(IntPtr h);
+    [DllImport("user32")] static extern IntPtr SetProcessDpiAwarenessContext(IntPtr value);
+    [DllImport("user32")] static extern uint GetDpiForSystem();
     [DllImport("gdi32")] static extern IntPtr CreateCompatibleDC(IntPtr hdc);
     [DllImport("gdi32")] static extern bool DeleteDC(IntPtr hdc);
     [DllImport("gdi32")] static extern IntPtr CreateDIBSection(IntPtr hdc, ref BITMAPINFOHEADER bmi, uint usage, out IntPtr bits, IntPtr section, uint offset);
