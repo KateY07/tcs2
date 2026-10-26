@@ -18,7 +18,7 @@ internal sealed class WatermarkOverlay
     const string ClassName = "TcsWatermarkOverlay";
     const string Title = "● TCS remote control";
     const int Width = 256, Height = 50, MaxLines = 2, MarginRight = 24;
-    const double TextOpacity = 0.78, ShadowOpacity = 0.5;   // kept low on purpose: visible, not loud
+    const double TextOpacity = 1.0, ShadowOpacity = 0.6;   // fully opaque text; the glyphs are thin, so it stays unobtrusive
     const uint WS_POPUP = 0x80000000;
     const uint WS_EX_LAYERED = 0x00080000, WS_EX_TRANSPARENT = 0x00000020, WS_EX_TOPMOST = 0x00000008,
                WS_EX_TOOLWINDOW = 0x00000080, WS_EX_NOACTIVATE = 0x08000000;
