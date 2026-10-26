@@ -71,7 +71,7 @@ if ((Test-Path -LiteralPath $tcsKey) -or (Test-Path -LiteralPath ($tcsKey + '.pu
 
 ## 3. 安装（无需管理员权限）
 
-从 [GitHub Releases](https://github.com/KateY07/tcs2/releases) 获取发布包；当前版本安装包为 tcs-manual-2026.10.22.1.exe。两端分别双击安装程序，会出现安装窗口，回答“这台是否为主控端”（是 = 主控端，否 = 被控端）。回答决定检查哪个私钥，同一安装包包含两个程序。无人值守时可预设环境变量 `TCS_ROLE=controller` 或 `server` 跳过提问。
+从 [GitHub Releases](https://github.com/KateY07/tcs2/releases) 获取发布包；当前版本安装包为 tcs-manual-2026.10.26.1.exe。两端分别双击安装程序，会出现安装窗口，从菜单里选择本机角色（1 = 主控端 Controller，2 = 被控端 Controlled server）。选择决定检查哪个私钥，同一安装包包含两个程序。无人值守时可预设环境变量 `TCS_ROLE=controller` 或 `server` 跳过提问。
 
 安装程序只检查固定位置的私钥是否可读取、格式及签名是否可用，公钥和指纹直接从私钥推导。私钥缺失、损坏或带口令时停止（窗口显示失败并展开详情），详情中有错误和供全新用户复制的生成脚本；已有身份应恢复原私钥。不会继续复制程序或修改用户 Path，也不会自动执行生成命令。不要求同名 .pub 存在。
 

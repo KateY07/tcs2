@@ -1,6 +1,6 @@
 ﻿param([string]$Version='2026.09.24.2')
 $ErrorActionPreference='Stop'
-if (-not $PSBoundParameters.ContainsKey('Version')) { $Version='2026.10.22.1' }
+if (-not $PSBoundParameters.ContainsKey('Version')) { $Version='2026.10.26.1' }
 if ($Version -notmatch '^[A-Za-z0-9._-]+$') { throw 'Invalid version' }
 $repo=Split-Path $PSScriptRoot -Parent
 $release="D:\pub\tcs\$Version.zip"

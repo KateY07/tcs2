@@ -1,7 +1,7 @@
 @echo off
 setlocal EnableExtensions
 rem TCS user installer. Runs in a plain console and inside the onesetup UI shell: lines printed as ".command text"
-rem drive the window (.title .info .warn .error .progress .ask); everything else goes to its Details log.
+rem drive the window (.title .info .warn .error .progress .ask .choose); everything else goes to its Details log.
 rem Keep this file ASCII. The UI shell answers .ask on stdin, so "pause" is skipped when ONESETUP_SHELL is set.
 set "TARGET=%LOCALAPPDATA%\TCS"
 echo .title TCS Setup
@@ -13,13 +13,11 @@ if defined TCS_ROLE set "ROLE_PRESET=1"
 if defined TCS_ROLE goto role_known
 echo .info Choosing this computer's role
 echo .progress 5
-echo .ask Is this the controller, where you type tcs commands? Choose No for the controlled server that runs tcsd.
-set "ANS="
-set /p ANS=
-if /i "%ANS%"=="yes" set "TCS_ROLE=controller"
-if /i "%ANS%"=="y" set "TCS_ROLE=controller"
-if /i "%ANS%"=="no" set "TCS_ROLE=server"
-if /i "%ANS%"=="n" set "TCS_ROLE=server"
+echo .choose Which role is this computer?; Controller - you type tcs commands; Controlled server - runs tcsd
+set "PICK="
+set /p PICK=
+if "%PICK%"=="1" set "TCS_ROLE=controller"
+if "%PICK%"=="2" set "TCS_ROLE=server"
 if not defined TCS_ROLE goto bad_role
 :role_known
 if /i "%TCS_ROLE%"=="controller" goto role_ok
@@ -66,7 +64,7 @@ exit /b 1
 echo .error tcs.exe or tcsd.exe is missing from the installer. Download it again.
 exit /b 1
 :bad_role
-echo .error Answer yes for the controller or no for the controlled server (or set TCS_ROLE to controller or server).
+echo .error Pick 1 for the controller or 2 for the controlled server (or set TCS_ROLE to controller or server).
 exit /b 1
 :prerequisites
 echo .error No usable private key was found for this role. Open Details for the PowerShell script that creates one.
