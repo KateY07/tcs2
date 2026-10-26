@@ -26,6 +26,32 @@ public sealed class tcsd
 
     // "tcsd pair" opens the window as soon as the listener is up.
     public bool OpenPairingOnStart { get; set; }
+
+    // When set, this PC shows an always-on-screen watermark of remote activity, and exec/upload are refused
+    // while that watermark is not visible, so remote control can never run unseen. Set by the real daemon on
+    // Windows (see Program.cs); left off for the test harness and on Linux.
+    public bool RequireWatermark { get; set; }
+#if !TCS_TESTING
+    Tcs.WatermarkOverlay? watermark;
+#endif
+
+    // Null when exec/upload may proceed; otherwise the refusal response to return (and it is audited here).
+    byte[]? WatermarkGuard(string action, string fingerprint)
+    {
+#if !TCS_TESTING
+        if (RequireWatermark && OperatingSystem.IsWindows() && watermark is { IsHealthy: true })
+        {
+            return null;
+        }
+        if (RequireWatermark)
+        {
+            Audit(action + "-refused", fingerprint, "NO_WATERMARK", CurrentSource.Value);
+            return HttpResponse(503, "application/json",
+                "{\"error\":\"refused: the on-screen activity watermark is not visible on this computer, so remote execution is disabled until it is restored. The controlled PC must have an interactive desktop with the TCS watermark shown.\"}");
+        }
+#endif
+        return null;
+    }
 #if TCS_TESTING
     public string? FixedPairingCode { get; set; }
 #endif
@@ -118,6 +144,16 @@ public sealed class tcsd
         var listener = new TcpListener(IPAddress.IPv6Any, port);
         listener.Server.DualMode = true;
         listener.Start();
+#if !TCS_TESTING
+        if (RequireWatermark && OperatingSystem.IsWindows())
+        {
+            watermark = new Tcs.WatermarkOverlay(Tcs.Pairing.Fingerprint(hostBlob));
+            watermark.Start();
+            watermark.Push($"tcsd started on TCP {port} — visible activity watermark");
+            if (!watermark.IsHealthy)
+                Console.Error.WriteLine("tcsd: the activity watermark could not be shown (no interactive desktop?). exec and upload will be refused until it is visible.");
+        }
+#endif
         Audit("daemon-start", Tcs.Pairing.Fingerprint(hostBlob), "OK", $"port={port} keys={authorizedBlobs.Count}");
         Console.Error.WriteLine($"tcsd started: IPv4/IPv6 TCP {port}\nHost fingerprint: {Tcs.Pairing.Fingerprint(hostBlob)}\nAuthorized controller keys: {authorizedBlobs.Count}\nData folder: {Path.GetDirectoryName(auditPath)}\nPairing is off: it is only available after starting tcsd with 'tcsd pair'. Ctrl+C to stop.");
         if (OpenPairingOnStart)
@@ -304,6 +340,12 @@ public sealed class tcsd
         {
             return HttpResponse(400, "application/json", "{\"error\":\"script must be a non-empty string\"}");
         }
+        if (WatermarkGuard("exec", fingerprint) is { } refused) return refused;
+#if !TCS_TESTING
+        var firstLine = request.Script.Split('\n', 2)[0].Trim();
+        if (firstLine.Length > 60) firstLine = firstLine[..60] + "…";
+        watermark?.Push($"exec  {CurrentSource.Value}  {fingerprint[..Math.Min(20, fingerprint.Length)]}  {firstLine}");
+#endif
         var scriptPath = Path.Combine(Path.GetTempPath(), "tcs", $"{Guid.NewGuid():N}.py");
         Directory.CreateDirectory(Path.GetDirectoryName(scriptPath)!);
         await File.WriteAllTextAsync(scriptPath, request.Script, Encoding.UTF8, cancellationToken);
@@ -316,6 +358,9 @@ public sealed class tcsd
             WriteAudit(JsonSerializer.Serialize(
                 new TcsExecAudit(DateTimeOffset.UtcNow, "/v1/exec", fingerprint, started.ElapsedMilliseconds, result.ExitCode, result.TimedOut, CurrentSource.Value, Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(request.Script))).ToLowerInvariant()),
                 TcsJsonContext.Default.TcsExecAudit));
+#if !TCS_TESTING
+            watermark?.Push($"  ↳ {(result.TimedOut ? "timeout" : "exit=" + result.ExitCode)}  ({started.ElapsedMilliseconds} ms)");
+#endif
             return HttpResponse(200, "application/json", JsonSerializer.Serialize(result, TcsJsonContext.Default.ExecResult));
         }
         finally
@@ -330,6 +375,7 @@ public sealed class tcsd
         {
             return HttpResponse(400, "application/json", "{\"error\":\"expected multipart/form-data\"}");
         }
+        if (WatermarkGuard("upload", fingerprint) is { } refused) return refused;
         var boundary = contentType[(contentType.IndexOf("boundary=", StringComparison.OrdinalIgnoreCase) + 9)..].Trim(' ', '"');
         var marker = Encoding.UTF8.GetBytes("--" + boundary);
         var start = IndexOf(body, marker, 0);
@@ -362,6 +408,9 @@ public sealed class tcsd
         WriteAudit(JsonSerializer.Serialize(
             new TcsUploadAudit(DateTimeOffset.UtcNow, "/v1/upload", fingerprint, new[] { stored }, CurrentSource.Value),
             TcsJsonContext.Default.TcsUploadAudit));
+#if !TCS_TESTING
+        watermark?.Push($"upload  {CurrentSource.Value}  {fingerprint[..Math.Min(20, fingerprint.Length)]}  {filename}");
+#endif
         return HttpResponse(200, "application/json", JsonSerializer.Serialize(
             new UploadResponse(new[] { stored }), TcsJsonContext.Default.UploadResponse));
     }

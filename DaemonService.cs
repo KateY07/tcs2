@@ -32,7 +32,7 @@ internal sealed class DaemonService(int port) : BackgroundService
         try
         {
             Console.Error.WriteLine($"{DateTimeOffset.UtcNow:O} Starting TCS on dual-stack TCP {port}");
-            var daemon = new global::tcsd();
+            var daemon = new global::tcsd { RequireWatermark = OperatingSystem.IsWindows() };
             await daemon.RunAsync(IPAddress.IPv6Any, port, stoppingToken);
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)

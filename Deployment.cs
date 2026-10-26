@@ -82,6 +82,47 @@ if ((Test-Path -LiteralPath $tcsKey) -or (Test-Path -LiteralPath ($tcsKey + '.pu
         Console.WriteLine($"Pre-install check passed: {path}\nPublic key fingerprint (derived from the private key): {Pairing.Fingerprint(blob)}");
     }
 
+    internal const string ServiceTaskName = "TCS controlled PC (tcsd)";
+
+    // Registers (or removes) a per-user logon task that starts tcsd in the user's interactive session, where the
+    // activity watermark can be shown. No administrator rights are needed for the current user's own logon task.
+    // This is deliberately not a Windows service: a session-0 service has no desktop, so it could never show the
+    // watermark and would refuse every command.
+    internal static void ServiceTask(bool install, string[] options)
+    {
+        if (!OperatingSystem.IsWindows())
+            throw new PlatformNotSupportedException("install-service is Windows-only. On Linux use the systemd unit (see tcsd.service in the Linux package).");
+        var exe = Environment.ProcessPath ?? throw new InvalidOperationException("Cannot determine this executable's path.");
+        var port = "10122";
+        for (var i = 0; i < options.Length; i += 2)
+        {
+            if (options[i] != "--port" || i + 1 >= options.Length) throw new ArgumentException("Usage: tcsd install-service [--port N] | tcsd uninstall-service");
+            if (!int.TryParse(options[i + 1], out var p) || p is < 1 or > 65535) throw new ArgumentException("--port must be 1-65535.");
+            port = options[i + 1];
+        }
+        if (install) RequireKey(HostKey);   // fail early if the host key is missing
+
+        var schtasks = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "schtasks.exe");
+        var startInfo = new System.Diagnostics.ProcessStartInfo { FileName = schtasks, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+        if (install)
+        {
+            foreach (var a in new[] { "/Create", "/TN", ServiceTaskName, "/SC", "ONLOGON", "/TR", $"\"{exe}\" --port {port}", "/RL", "LIMITED", "/IT", "/F" })
+                startInfo.ArgumentList.Add(a);
+        }
+        else
+        {
+            foreach (var a in new[] { "/Delete", "/TN", ServiceTaskName, "/F" }) startInfo.ArgumentList.Add(a);
+        }
+        using var process = System.Diagnostics.Process.Start(startInfo) ?? throw new InvalidOperationException("Could not start schtasks.exe.");
+        var output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException($"schtasks failed (exit {process.ExitCode}): {output.Trim()}");
+        Console.WriteLine(install
+            ? $"Registered the logon task \"{ServiceTaskName}\": tcsd will start at sign-in on TCP {port} and show the activity watermark.\nStart it now without signing out again: schtasks /Run /TN \"{ServiceTaskName}\"\nRemove it with: tcsd uninstall-service\nPairing is never opened by the task; run \"tcsd pair\" in a terminal to pair."
+            : $"Removed the logon task \"{ServiceTaskName}\". A running tcsd is not stopped; close its window or sign out.");
+    }
+
     // Cheap per-call check; the full sign/verify self-test stays in ValidatePair (install check, daemon start, pairing).
     internal static void RequireKey(string path)
     {

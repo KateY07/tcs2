@@ -43,6 +43,13 @@ AUDIT
   The log is data\tcs-audit.log (JSON lines): connections, denied attempts, pairing windows and attempts,
   exec/upload with the controller fingerprint, source address and a SHA-256 of the script. Rotated at 5 MB.
 
+RUN AT SIGN-IN (Windows)
+  tcsd install-service [--port N]  start tcsd automatically at sign-in (a per-user logon task; no admin needed)
+  tcsd uninstall-service           remove that logon task
+  It runs in your interactive session and shows an always-on-screen activity watermark. The watermark is
+  click-through and re-shows itself if hidden; while it is not visible (no desktop, or it was closed), exec
+  and upload are refused, so remote control is never invisible. Ending tcsd removes the watermark and the daemon.
+
 OPTIONS
   -h, --help                       show this help
   --port <1-65535>                 TCP listen port (default: 10122)
@@ -153,6 +160,11 @@ if (daemonMode && pairingArgs.FirstOrDefault() == "audit")
     PairCommand.ShowAudit(pairingArgs[1..]);
     return;
 }
+if (daemonMode && pairingArgs.FirstOrDefault() is "install-service" or "uninstall-service")
+{
+    Deployment.ServiceTask(pairingArgs[0] == "install-service", pairingArgs[1..]);
+    return;
+}
 // Pairing is never implicit: it exists only for a tcsd started with "tcsd pair" (or "tcsd --pair").
 var pairMode = daemonMode && (pairingArgs.FirstOrDefault() == "pair" || args.Contains("--pair"));
 if (pairMode)
@@ -193,7 +205,7 @@ if (args.FirstOrDefault() == "--tcsd" || string.Equals(executableName, "tcsd", S
         await DaemonService.RunAsync(Option("--service-name", "tcsd"), int.Parse(Option("--port", "10122")));
         return;
     }
-    var daemon = new tcsd { OpenPairingOnStart = pairMode };
+    var daemon = new tcsd { OpenPairingOnStart = pairMode, RequireWatermark = OperatingSystem.IsWindows() };
     await daemon.RunAsync(IPAddress.Any, int.Parse(Option("--port", "10122")));
     return;
 }
